@@ -1,0 +1,577 @@
+import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { ActivitySquare, Layers, MapPin, Search, Target } from "lucide-react";
+
+import { Navigation } from "@/components/Navigation";
+import { DonutChart } from "@/components/charts/DonutChart";
+import { LoadingState } from "@/components/LoadingState";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { useAuth } from "@/contexts/useAuth";
+import { googleSheetsApi } from "@/services/googleSheetsApi";
+import { getCombinedQueryState } from "@/lib/queryState";
+
+interface DetailFilters {
+  targetGroup: string;
+  district: string;
+  subdistrict: string;
+  village: string;
+  period: string;
+  search: string;
+}
+
+const targetGroupOptions = [
+  { value: "general", label: "บุคคลทั่วไป" },
+  { value: "monk", label: "พระสงฆ์" },
+];
+
+const initialFilters: DetailFilters = {
+  targetGroup: "general",
+  district: "",
+  subdistrict: "",
+  village: "",
+  period: "",
+  search: "",
+};
+
+const ALL_DISTRICT_VALUE = "__all_district__";
+const ALL_SUBDISTRICT_VALUE = "__all_subdistrict__";
+const ALL_VILLAGE_VALUE = "__all_village__";
+
+const Detail = () => {
+  const { user } = useAuth();
+  const [filters, setFilters] = useState<DetailFilters>(initialFilters);
+  const [recordsPage, setRecordsPage] = useState(1);
+  const recordsLimit = 50;
+
+  useEffect(() => {
+    if (user?.role === "officer" && user.district) {
+      setFilters((prev) =>
+        prev.district ? prev : { ...prev, district: user.district }
+      );
+    }
+  }, [user?.district, user?.role]);
+
+  const detailQuery = useQuery({
+    queryKey: [
+      "detail",
+      filters.targetGroup,
+      filters.district || "all",
+      filters.subdistrict || "all",
+      filters.village || "all",
+      filters.period || "latest",
+    ],
+    queryFn: () =>
+      googleSheetsApi.getDashboardData({
+        targetGroup: filters.targetGroup,
+        district: filters.district || undefined,
+        subdistrict: filters.subdistrict || undefined,
+        village: filters.village || undefined,
+        period: filters.period || undefined,
+      }),
+  });
+
+  const data = detailQuery.data;
+  const availability = data?.availability;
+  const isError = detailQuery.isError;
+
+  const recordsQuery = useQuery({
+    queryKey: [
+      "detail-records",
+      filters.targetGroup,
+      filters.district || "all",
+      filters.subdistrict || "all",
+      filters.village || "all",
+      filters.period || "latest",
+      filters.search || "",
+      recordsPage,
+      recordsLimit,
+    ],
+    queryFn: () =>
+      googleSheetsApi.getNcdRecords({
+        targetGroup: filters.targetGroup,
+        district: filters.district || undefined,
+        subdistrict: filters.subdistrict || undefined,
+        village: filters.village || undefined,
+        period: filters.period || undefined,
+        search: filters.search || undefined,
+        page: recordsPage,
+        limit: recordsLimit,
+      }),
+  });
+
+  useEffect(() => {
+    setRecordsPage(1);
+  }, [
+    filters.targetGroup,
+    filters.district,
+    filters.subdistrict,
+    filters.village,
+    filters.period,
+    filters.search,
+  ]);
+
+  const { isInitialLoading: showInitialLoading, isRefreshing: showRefreshing } =
+    getCombinedQueryState([detailQuery, recordsQuery]);
+
+  useEffect(() => {
+    if (!availability) {
+      return;
+    }
+
+    const districts = availability.districts;
+    if (!filters.district && districts.length === 1) {
+      setFilters((prev) => ({ ...prev, district: districts[0] }));
+    }
+
+    const periods = availability.periods;
+    if (!filters.period && periods.length > 0) {
+      setFilters((prev) => ({ ...prev, period: periods[0].key }));
+    }
+  }, [availability, filters.district, filters.period]);
+
+  const subdistrictOptions = useMemo(() => {
+    if (!filters.district || !availability?.subdistrictsByDistrict) {
+      return [];
+    }
+    return availability.subdistrictsByDistrict[filters.district] ?? [];
+  }, [availability?.subdistrictsByDistrict, filters.district]);
+
+  const villageOptions = useMemo(() => {
+    if (
+      !filters.district ||
+      !filters.subdistrict ||
+      !availability?.villagesBySubdistrict
+    ) {
+      return [];
+    }
+    const key = `${filters.district}::${filters.subdistrict}`;
+    return availability.villagesBySubdistrict[key] ?? [];
+  }, [
+    availability?.villagesBySubdistrict,
+    filters.district,
+    filters.subdistrict,
+  ]);
+
+  useEffect(() => {
+    if (!subdistrictOptions.length) {
+      if (filters.subdistrict || filters.village) {
+        setFilters((prev) => ({ ...prev, subdistrict: "", village: "" }));
+      }
+      return;
+    }
+
+    if (
+      filters.subdistrict &&
+      !subdistrictOptions.includes(filters.subdistrict)
+    ) {
+      setFilters((prev) => ({ ...prev, subdistrict: "", village: "" }));
+      return;
+    }
+
+    if (!filters.subdistrict && subdistrictOptions.length === 1) {
+      setFilters((prev) => ({ ...prev, subdistrict: subdistrictOptions[0] }));
+    }
+  }, [filters.subdistrict, filters.village, subdistrictOptions]);
+
+  useEffect(() => {
+    if (!filters.subdistrict) {
+      if (filters.village) {
+        setFilters((prev) => ({ ...prev, village: "" }));
+      }
+      return;
+    }
+
+    if (!villageOptions.length) {
+      if (filters.village) {
+        setFilters((prev) => ({ ...prev, village: "" }));
+      }
+      return;
+    }
+
+    if (filters.village && !villageOptions.includes(filters.village)) {
+      setFilters((prev) => ({ ...prev, village: "" }));
+      return;
+    }
+
+    if (!filters.village && villageOptions.length === 1) {
+      setFilters((prev) => ({ ...prev, village: villageOptions[0] }));
+    }
+  }, [filters.subdistrict, filters.village, villageOptions]);
+
+  const summary = data?.summary;
+  const recordsPagination = recordsQuery.data;
+  const detailRows = recordsPagination?.records ?? [];
+  const totalRecords = recordsPagination?.total ?? 0;
+  const totalPeople = summary?.total ?? 0;
+  const hasMoreRecords = recordsPagination?.hasMore ?? false;
+  const totalRecordPages =
+    recordsPagination && recordsPagination.limit
+      ? Math.max(
+          1,
+          Math.ceil((recordsPagination.total || 0) / recordsPagination.limit)
+        )
+      : 1;
+  const isRecordsInitialLoading =
+    recordsQuery.fetchStatus === "fetching" && recordsQuery.status === "pending";
+  const isRecordsRefreshing =
+    recordsQuery.fetchStatus === "fetching" && recordsQuery.status !== "pending";
+
+  const donutData = useMemo(() => {
+    if (!summary) {
+      return null;
+    }
+    return {
+      labels: ["ปกติ", "เสี่ยง", "ป่วย"],
+      datasets: [
+        {
+          data: [summary.normal, summary.risk, summary.sick],
+          backgroundColor: [
+            "hsl(var(--success))",
+            "hsl(var(--warning))",
+            "hsl(var(--destructive))",
+          ],
+          borderWidth: 0,
+        },
+      ],
+    };
+  }, [summary]);
+
+  const selectedPeriodLabel =
+    availability?.periods.find((item) => item.key === filters.period)?.label ??
+    data?.metadata?.period ??
+    "";
+
+  const handleFilterChange = <T extends keyof DetailFilters>(
+    key: T,
+    value: DetailFilters[T]
+  ) => {
+    setFilters((prev) => ({
+      ...prev,
+      [key]: value,
+      ...(key === "targetGroup"
+        ? { district: "", subdistrict: "", village: "", period: "" }
+        : {}),
+      ...(key === "district" ? { subdistrict: "", village: "" } : {}),
+      ...(key === "subdistrict" ? { village: "" } : {}),
+    }));
+  };
+
+  return (
+    <div className="min-h-screen bg-background">
+      <Navigation />
+
+      <main className="container mx-auto px-4 py-8 space-y-8">
+        <header className="space-y-2">
+          <h2 className="text-3xl md:text-4xl font-bold">รายละเอียดข้อมูลอำเภอ</h2>
+          <p className="text-muted-foreground">
+            วิเคราะห์ข้อมูลเชิงลึกแยกตามพื้นที่และช่วงเวลา
+          </p>
+        </header>
+
+        {isError && (
+          <Card className="border-destructive/50 bg-destructive/10">
+            <CardContent className="py-3 text-sm text-destructive">
+              ไม่สามารถโหลดข้อมูลได้ กรุณาลองใหม่อีกครั้ง
+            </CardContent>
+          </Card>
+        )}
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+              <Search className="w-4 h-4" />
+              ตัวกรองข้อมูล
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div>
+              <span className="text-sm font-medium flex items-center gap-2">
+                <Target className="w-4 h-4 text-primary" />
+                กลุ่มเป้าหมาย
+              </span>
+              <Select
+                value={filters.targetGroup}
+                onValueChange={(value) =>
+                  handleFilterChange("targetGroup", value)
+                }
+              >
+                <SelectTrigger className="mt-2">
+                  <SelectValue placeholder="เลือกกลุ่มเป้าหมาย" />
+                </SelectTrigger>
+                <SelectContent>
+                  {targetGroupOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <span className="text-sm font-medium flex items-center gap-2">
+                <Layers className="w-4 h-4 text-primary" />
+                อำเภอ
+              </span>
+              <Select
+                value={filters.district || ALL_DISTRICT_VALUE}
+                onValueChange={(value) =>
+                  handleFilterChange(
+                    "district",
+                    value === ALL_DISTRICT_VALUE ? "" : value
+                  )
+                }
+                disabled={
+                  user?.role === "officer" || !availability?.districts?.length
+                }
+              >
+                <SelectTrigger className="mt-2">
+                  <SelectValue placeholder="เลือกอำเภอ" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_DISTRICT_VALUE}>ทั้งหมด</SelectItem>
+                  {availability?.districts.map((district) => (
+                    <SelectItem key={district} value={district}>
+                      {district}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <span className="text-sm font-medium flex items-center gap-2">
+                <MapPin className="w-4 h-4 text-primary" />
+                ตำบล
+              </span>
+              <Select
+                value={filters.subdistrict || ALL_SUBDISTRICT_VALUE}
+                onValueChange={(value) =>
+                  handleFilterChange(
+                    "subdistrict",
+                    value === ALL_SUBDISTRICT_VALUE ? "" : value
+                  )
+                }
+                disabled={!subdistrictOptions.length}
+              >
+                <SelectTrigger className="mt-2">
+                  <SelectValue placeholder="เลือกตำบล" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_SUBDISTRICT_VALUE}>ทั้งหมด</SelectItem>
+                  {subdistrictOptions.map((subdistrict) => (
+                    <SelectItem key={subdistrict} value={subdistrict}>
+                      {subdistrict}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <span className="text-sm font-medium flex items-center gap-2">
+                <MapPin className="w-4 h-4 text-primary" />
+                หมู่บ้าน
+              </span>
+              <Select
+                value={filters.village || ALL_VILLAGE_VALUE}
+                onValueChange={(value) =>
+                  handleFilterChange(
+                    "village",
+                    value === ALL_VILLAGE_VALUE ? "" : value
+                  )
+                }
+                disabled={!villageOptions.length}
+              >
+                <SelectTrigger className="mt-2">
+                  <SelectValue placeholder="เลือกหมู่บ้าน" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_VILLAGE_VALUE}>ทั้งหมด</SelectItem>
+                  {villageOptions.map((village) => (
+                    <SelectItem key={village} value={village}>
+                      {village}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <span className="text-sm font-medium flex items-center gap-2">
+                <ActivitySquare className="w-4 h-4 text-primary" />
+                ช่วงเวลา
+              </span>
+              <Select
+                value={filters.period}
+                onValueChange={(value) => handleFilterChange("period", value)}
+                disabled={!availability?.periods.length}
+              >
+                <SelectTrigger className="mt-2">
+                  <SelectValue placeholder="เลือกช่วงเวลา" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availability?.periods.map((period) => (
+                    <SelectItem key={period.key} value={period.key}>
+                      {period.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="md:col-span-2 lg:col-span-4">
+              <span className="text-sm font-medium flex items-center gap-2">
+                <Search className="w-4 h-4 text-primary" />
+                ค้นหา
+              </span>
+              <Input
+                value={filters.search}
+                onChange={(event) =>
+                  handleFilterChange("search", event.target.value)
+                }
+                placeholder="ค้นหาด้วยชื่ออำเภอ ตำบล หรือชื่อหมู่บ้าน"
+                className="mt-2"
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {showInitialLoading ? (
+          <LoadingState message="กำลังโหลดข้อมูลรายละเอียด..." />
+        ) : (
+          <>
+            <section className="space-y-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <Badge variant="outline">
+                  ช่วงเวลา: {selectedPeriodLabel || "ไม่ระบุ"}
+                </Badge>
+                {filters.district && (
+                  <Badge variant="outline">อำเภอ: {filters.district}</Badge>
+                )}
+                {filters.subdistrict && (
+                  <Badge variant="outline">ตำบล: {filters.subdistrict}</Badge>
+                )}
+                {filters.village && (
+                  <Badge variant="outline">หมู่บ้าน: {filters.village}</Badge>
+                )}
+                <Badge variant="outline">
+                  จำนวนรายการ: {totalRecords.toLocaleString()} แถว
+                </Badge>
+                <Badge variant="outline">
+                  จำนวนคนทั้งหมด: {totalPeople.toLocaleString()} คน
+                </Badge>
+              </div>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>สัดส่วนสถานะผู้รับการประเมิน</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {summary && donutData ? (
+                    <div className="max-w-md mx-auto">
+                      <DonutChart data={donutData} />
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      ไม่มีข้อมูลสำหรับการแสดงในช่วงเวลานี้
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            </section>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>รายละเอียดข้อมูลรายพื้นที่</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {showRefreshing ? (
+                  <p className="text-sm text-muted-foreground">
+                    กำลังอัปเดตข้อมูล...
+                  </p>
+                ) : detailRows.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    ไม่มีข้อมูลในช่วงเวลาที่เลือก
+                  </p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-muted">
+                        <tr>
+                          <th className="p-3 text-left text-sm font-medium">อำเภอ</th>
+                          <th className="p-3 text-left text-sm font-medium">ตำบล</th>
+                          <th className="p-3 text-left text-sm font-medium">หมู่บ้าน</th>
+                          <th className="p-3 text-left text-sm font-medium">ช่วงเวลา</th>
+                          <th className="p-3 text-right text-sm font-medium text-success">
+                            ปกติ
+                          </th>
+                          <th className="p-3 text-right text-sm font-medium text-warning">
+                            เสี่ยง
+                          </th>
+                          <th className="p-3 text-right text-sm font-medium text-destructive">
+                            ป่วย
+                          </th>
+                          <th className="p-3 text-right text-sm font-medium">รวม</th>
+                          <th className="p-3 text-right text-sm font-medium">
+                            ส่งต่อ
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {detailRows.map((row) => {
+                          const total =
+                            (row.total ?? 0) || row.normal + row.risk + row.sick;
+                          return (
+                            <tr
+                              key={`${row.district}-${row.subdistrict}-${row.village}-${row.period}`}
+                              className="hover:bg-muted/50"
+                            >
+                              <td className="p-3 text-sm">{row.district}</td>
+                              <td className="p-3 text-sm">{row.subdistrict}</td>
+                              <td className="p-3 text-sm">{row.village}</td>
+                              <td className="p-3 text-sm">
+                                {row.period ?? selectedPeriodLabel}
+                              </td>
+                              <td className="p-3 text-sm text-right text-success">
+                                {row.normal.toLocaleString()}
+                              </td>
+                              <td className="p-3 text-sm text-right text-warning">
+                                {row.risk.toLocaleString()}
+                              </td>
+                              <td className="p-3 text-sm text-right text-destructive">
+                                {row.sick.toLocaleString()}
+                              </td>
+                              <td className="p-3 text-sm text-right font-medium">
+                                {total.toLocaleString()}
+                              </td>
+                              <td className="p-3 text-sm text-right">
+                                {(row.referCount ?? 0).toLocaleString()}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </>
+        )}
+      </main>
+    </div>
+  );
+};
+
+export default Detail;
