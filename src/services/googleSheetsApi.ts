@@ -366,11 +366,22 @@ export interface SaveDistrictEntryPayload {
   population?: number | null;
 }
 
+export interface SyncedLocationSummary {
+  generalUpdated: number;
+  monkUpdated: number;
+  totalUpdated: number;
+  updatedRecordIds?: {
+    general: string[];
+    monk: string[];
+  };
+}
+
 export interface SaveDistrictEntryResult {
   success: boolean;
   message: string;
   entry?: DistrictEntry;
   districts?: DistrictsMapping;
+  syncedRecords?: SyncedLocationSummary;
 }
 
 export interface DeleteDistrictEntryResult {
@@ -721,6 +732,15 @@ class GoogleSheetsApiService {
       message?: string;
       entry?: DistrictEntry;
       districts?: unknown;
+      syncedRecords?: {
+        generalUpdated?: number;
+        monkUpdated?: number;
+        totalUpdated?: number;
+        updatedRecordIds?: {
+          general?: unknown[];
+          monk?: unknown[];
+        };
+      };
     }>("saveDistrictEntry", payload);
 
     if (!result.success) {
@@ -733,11 +753,37 @@ class GoogleSheetsApiService {
       normalizedDistricts = this.normalizeDistrictMapping(result.districts);
     }
 
+    let normalizedSyncedRecords: SyncedLocationSummary | undefined;
+    if (result.syncedRecords) {
+      const generalIdsRaw = result.syncedRecords.updatedRecordIds?.general;
+      const monkIdsRaw = result.syncedRecords.updatedRecordIds?.monk;
+      const hasGeneralIds = Array.isArray(generalIdsRaw) && generalIdsRaw.length > 0;
+      const hasMonkIds = Array.isArray(monkIdsRaw) && monkIdsRaw.length > 0;
+      const generalIds = hasGeneralIds
+        ? generalIdsRaw.map((value) => String(value))
+        : undefined;
+      const monkIds = hasMonkIds ? monkIdsRaw.map((value) => String(value)) : undefined;
+
+      normalizedSyncedRecords = {
+        generalUpdated: Number(result.syncedRecords.generalUpdated ?? 0),
+        monkUpdated: Number(result.syncedRecords.monkUpdated ?? 0),
+        totalUpdated: Number(result.syncedRecords.totalUpdated ?? 0),
+        updatedRecordIds:
+          generalIds || monkIds
+            ? {
+                general: generalIds ?? [],
+                monk: monkIds ?? [],
+              }
+            : undefined,
+      };
+    }
+
     return {
       success: true,
       message: result.message || "บันทึกข้อมูลพื้นที่เรียบร้อย",
       entry: result.entry,
       districts: normalizedDistricts,
+      syncedRecords: normalizedSyncedRecords,
     };
   }
 

@@ -150,7 +150,25 @@ export const DistrictManager = () => {
     mutationFn: (payload: SaveDistrictEntryPayload) =>
       googleSheetsApi.saveDistrictEntry(payload),
     onSuccess: (result, variables) => {
-      toast.success(result.message);
+      const synced = result.syncedRecords;
+      let successMessage = result.message || "บันทึกข้อมูลพื้นที่เรียบร้อย";
+      if (synced && synced.totalUpdated > 0) {
+        const details: string[] = [];
+        if (synced.generalUpdated > 0) {
+          details.push(
+            `บุคคลทั่วไป ${synced.generalUpdated.toLocaleString()} รายการ`
+          );
+        }
+        if (synced.monkUpdated > 0) {
+          details.push(`พระสงฆ์ ${synced.monkUpdated.toLocaleString()} รายการ`);
+        }
+        const suffix =
+          details.length > 0
+            ? ` (อัปเดตข้อมูล ${details.join(" และ ")})`
+            : ` (อัปเดตข้อมูล ${synced.totalUpdated.toLocaleString()} รายการ)`;
+        successMessage = `${successMessage}${suffix}`;
+      }
+      toast.success(successMessage);
       if (result.districts) {
         queryClient.setQueryData(["district-mapping"], result.districts);
       } else {
