@@ -85,6 +85,7 @@ import {
   googleSheetsApi,
   type DistrictsMapping,
   type ManagedUser,
+  type NcdMetrics,
   type NcdRecord,
   type UsersListResponse,
   type UserRole,
@@ -108,6 +109,22 @@ const metricsSchema = z.object({
   Smoking: metricSchema,
 });
 
+const METRIC_CATEGORY_VALUES = [
+  "Overview",
+  "Obesity",
+  "Diabetes",
+  "Hypertension",
+  "Mental",
+  "Alcohol",
+  "Smoking",
+] as const;
+
+const METRIC_STATUS_VALUES = ["normal", "risk", "sick"] as const;
+
+
+
+
+
 const ncdFormSchema = z.object({
   id: z.string().optional(),
   targetGroup: z.enum(["general", "monk"]),
@@ -128,6 +145,8 @@ const ncdFormSchema = z.object({
 });
 
 type NcdFormValues = z.infer<typeof ncdFormSchema>;
+
+
 
 const currentThaiYear = new Date().getFullYear() + 543;
 const currentMonth = new Date().getMonth() + 1;
@@ -383,6 +402,8 @@ const Admin = ({
     () => Number(form.getValues("referCount") ?? 0) > 0
   );
 
+
+
   const buildLocationParts = (
     district?: string,
     subdistrict?: string,
@@ -404,6 +425,13 @@ const Admin = ({
     }
     return parts;
   };
+
+  const normalizeForCompare = useCallback((value: unknown) => {
+    if (value === null || value === undefined) {
+      return "";
+    }
+    return String(value).trim().toLowerCase();
+  }, []);
 
   const resetFormForNewEntry = useCallback(
     (
@@ -444,6 +472,18 @@ const Admin = ({
   const metricsValues = form.watch("metrics");
   const referCountValue = form.watch("referCount");
   const showMetricsForm = formUnlocked || Boolean(editingRecord);
+
+  const allFiltersFilled =
+    Number.isFinite(yearValue) &&
+    Number.isFinite(monthValue) &&
+    Boolean(
+      targetGroupValue &&
+        districtValue &&
+        subdistrictValue &&
+        villageValue &&
+        mooValue
+    );
+
 
   const currentLocationLabel = useMemo(() => {
     const parts = buildLocationParts(
@@ -1005,17 +1045,6 @@ const Admin = ({
     !findNcdRecordMutation.isPending &&
     searchFeedback.status !== "not-found";
 
-  const allFiltersFilled =
-    Number.isFinite(yearValue) &&
-    Number.isFinite(monthValue) &&
-    Boolean(
-      targetGroupValue &&
-        districtValue &&
-        subdistrictValue &&
-        villageValue &&
-        mooValue
-    );
-
   useEffect(() => {
     if (!districtValue) {
       form.setValue("subdistrict", "");
@@ -1102,6 +1131,236 @@ const Admin = ({
       { unlock: false }
     );
   };
+
+  const computeMetricsDiff = useCallback(
+    (baseline: NcdMetrics | undefined, proposed: NcdMetrics): NcdMetrics => {
+      const diff: NcdMetrics = {};
+      metricStepKeys.forEach((key) => {
+        const baselineCategory = baseline?.[key] ?? emptyMetrics[key];
+        const proposedCategory = proposed?.[key] ?? emptyMetrics[key];
+        diff[key] = {
+          normal:
+            Number(proposedCategory?.normal ?? 0) -
+            Number(baselineCategory?.normal ?? 0),
+          risk:
+            Number(proposedCategory?.risk ?? 0) -
+            Number(baselineCategory?.risk ?? 0),
+          sick:
+            Number(proposedCategory?.sick ?? 0) -
+            Number(baselineCategory?.sick ?? 0),
+        };
+      });
+      return diff;
+    },
+    []
+  );
+
+  const isMetricsDiffEmpty = useCallback(
+    (diff: NcdMetrics | null | undefined) => {
+      if (!diff) {
+        return true;
+      }
+      return metricStepKeys.every((key) => {
+        const category = diff[key];
+        if (!category) {
+          return true;
+        }
+        return (
+          Number(category.normal || 0) === 0 &&
+          Number(category.risk || 0) === 0 &&
+          Number(category.sick || 0) === 0
+        );
+      });
+    },
+    []
+  );
+
+  const [adjustmentDialogOpen, setAdjustmentDialogOpen] = useState(false);
+  const [adjustmentReason, setAdjustmentReason] = useState("");
+  const [pendingAdjustmentValues, setPendingAdjustmentValues] =
+    useState<NcdFormValues | null>(null);
+
+  const pendingAdjustmentDiff = useMemo(() => {
+    if (!pendingAdjustmentValues || !editingRecord) {
+      return null;
+    }
+    return computeMetricsDiff(
+      editingRecord.metrics,
+      pendingAdjustmentValues.metrics
+    );
+  }, [pendingAdjustmentValues, editingRecord, computeMetricsDiff]);
+
+  const pendingAdjustmentHasChange = useMemo(
+    () => !isMetricsDiffEmpty(pendingAdjustmentDiff),
+    [pendingAdjustmentDiff, isMetricsDiffEmpty]
+  );
+
+  const metricTitleMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    metricStepConfigs.forEach((step) => {
+      map[step.key] = step.title;
+    });
+    return map;
+  }, []);
+
+  const adjustmentSummaryRows = useMemo(() => {
+    if (!pendingAdjustmentDiff || !pendingAdjustmentValues || !editingRecord) {
+      return [] as Array<{
+        key: MetricCategoryKey;
+        title: string;
+        baseline: NcdMetrics[string];
+        proposed: NcdMetrics[string];
+        diff: NcdMetrics[string];
+      }>;
+    }
+
+    return metricStepKeys
+      .map((key) => {
+        const diff = pendingAdjustmentDiff[key];
+        if (!diff) {
+          return null;
+        }
+        const hasChange =
+          Number(diff.normal || 0) !== 0 ||
+          Number(diff.risk || 0) !== 0 ||
+          Number(diff.sick || 0) !== 0;
+        if (!hasChange) {
+          return null;
+        }
+
+        const baselineCategory = editingRecord.metrics?.[key] ?? emptyMetrics[key];
+        const proposedCategory = pendingAdjustmentValues.metrics?.[key] ?? emptyMetrics[key];
+
+        return {
+          key,
+          title: metricTitleMap[key] ?? key,
+          baseline: baselineCategory,
+          proposed: proposedCategory,
+          diff,
+        };
+      })
+      .filter((entry): entry is {
+        key: MetricCategoryKey;
+        title: string;
+        baseline: NcdMetrics[string];
+        proposed: NcdMetrics[string];
+        diff: NcdMetrics[string];
+      } => Boolean(entry));
+  }, [
+    pendingAdjustmentDiff,
+    pendingAdjustmentValues,
+    editingRecord,
+    metricTitleMap,
+  ]);
+
+  const formatDelta = useCallback((value: number) => {
+    if (!Number.isFinite(value)) {
+      return "0";
+    }
+    const rounded = Math.round(value);
+    if (rounded > 0) {
+      return `+${rounded.toLocaleString()}`;
+    }
+    return rounded.toLocaleString();
+  }, []);
+
+  const handleCloseAdjustmentDialog = useCallback(() => {
+    setAdjustmentDialogOpen(false);
+    setPendingAdjustmentValues(null);
+    setAdjustmentReason("");
+  }, []);
+
+  const recordAdjustmentMutation = useMutation({
+    mutationFn: async ({
+      values,
+      reason,
+      baselineRecord,
+    }: {
+      values: NcdFormValues;
+      reason?: string;
+      baselineRecord: NcdRecord;
+    }) => {
+      const diff = computeMetricsDiff(
+        baselineRecord.metrics,
+        values.metrics
+      );
+      if (isMetricsDiffEmpty(diff)) {
+        throw new Error("ไม่มีการเปลี่ยนแปลงจากข้อมูลเดิม");
+      }
+
+      return googleSheetsApi.recordNcdAdjustment({
+        id: baselineRecord.id,
+        recordId: baselineRecord.id,
+        targetGroup: values.targetGroup,
+        year: values.year,
+        month: values.month,
+        district: values.district,
+        subdistrict: values.subdistrict,
+        village: values.village,
+        moo: values.moo,
+        metrics: values.metrics,
+        reason: reason?.trim() || undefined,
+      });
+    },
+    onSuccess: (result) => {
+      toast.success(result.message);
+      handleCloseAdjustmentDialog();
+      queryClient.invalidateQueries({ queryKey: ["ncd-records"] });
+      if (result.record) {
+        handleEditRecord(result.record);
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
+
+  const handleOpenAdjustmentDialog = useCallback(() => {
+    if (!editingRecord) {
+      toast.error("กรุณาเลือกข้อมูลที่ต้องการปรับก่อน");
+      return;
+    }
+    form.handleSubmit((values) => {
+      setPendingAdjustmentValues(values);
+      setAdjustmentReason("");
+      setAdjustmentDialogOpen(true);
+    })();
+  }, [editingRecord, form]);
+
+  const handleConfirmAdjustment = useCallback(() => {
+    if (!pendingAdjustmentValues || !editingRecord) {
+      toast.error("ไม่พบข้อมูลที่ต้องการปรับ");
+      return;
+    }
+
+    const diff = computeMetricsDiff(
+      editingRecord.metrics,
+      pendingAdjustmentValues.metrics
+    );
+
+    if (isMetricsDiffEmpty(diff)) {
+      toast.warning("ไม่มีการเปลี่ยนแปลงจากข้อมูลเดิม");
+      return;
+    }
+
+    recordAdjustmentMutation.mutate({
+      values: pendingAdjustmentValues,
+      reason: adjustmentReason,
+      baselineRecord: editingRecord,
+    });
+  }, [
+    pendingAdjustmentValues,
+    editingRecord,
+    adjustmentReason,
+    computeMetricsDiff,
+    isMetricsDiffEmpty,
+    recordAdjustmentMutation,
+  ]);
+
+  useEffect(() => {
+    handleCloseAdjustmentDialog();
+  }, [editingRecord?.id, handleCloseAdjustmentDialog]);
+
 
   const handleFindRecord = () => {
     const currentValues = form.getValues();
@@ -1551,7 +1810,10 @@ const Admin = ({
 
                         <section className="space-y-4 rounded-lg border border-primary/40 bg-primary/5 p-4">
                           <div className="space-y-1">
-                            <h3 className="text-sm font-semibold text-primary">
+                            <h3
+                              id="monthly-adjustment-heading"
+                              className="text-sm font-semibold text-primary"
+                            >
                               ค้นหาข้อมูลในระบบ
                             </h3>
                             <p className="text-xs text-primary/80">
@@ -1580,6 +1842,8 @@ const Admin = ({
                             </Button>
                           </div>
                         </section>
+
+
                       </div>
 
                       <div className="space-y-4">
@@ -1876,89 +2140,212 @@ const Admin = ({
                                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
                                   {isLastStep ? (
                                     <>
-                                      {editingRecord ? (
-                                        <Button
-                                          type="button"
-                                          variant="outline"
-                                          className="sm:w-auto w-full"
-                                          onClick={handleCancelEdit}
-                                        >
-                                          ยกเลิกการแก้ไข
-                                        </Button>
-                                      ) : (
-                                        <Button
-                                          type="button"
-                                          variant="outline"
-                                          className="sm:w-auto w-full"
-                                          onClick={() => {
-                                            setSearchFeedback({
-                                              status: "idle",
-                                            });
-                                            resetFormForNewEntry(
-                                              {
-                                                targetGroup: targetGroupValue,
-                                                year: currentThaiYear,
-                                                month: currentMonth,
-                                                district: "",
-                                                subdistrict: "",
-                                                village: "",
-                                                moo: "",
-                                              },
-                                              { unlock: true }
-                                            );
-                                          }}
-                                        >
-                                          ล้างฟอร์ม
-                                        </Button>
-                                      )}
-                                      <AlertDialog>
-                                        <AlertDialogTrigger asChild>
+                                      <div className="flex w-full flex-col gap-2 sm:flex-row">
+                                        {editingRecord ? (
                                           <Button
                                             type="button"
-                                            className="gap-2 sm:w-auto w-full"
-                                            disabled={
-                                              saveNcdMutation.isPending ||
-                                              referralNeedsAttention
-                                            }
+                                            variant="outline"
+                                            className="sm:w-auto w-full"
+                                            onClick={handleCancelEdit}
                                           >
-                                            {saveNcdMutation.isPending && (
-                                              <Loader2 className="w-4 h-4 animate-spin" />
-                                            )}
-                                            {editingRecord
-                                              ? "บันทึกการแก้ไข"
-                                              : "บันทึกข้อมูล"}
+                                            ยกเลิกการแก้ไข
                                           </Button>
-                                        </AlertDialogTrigger>
-                                        <AlertDialogContent>
-                                          <AlertDialogHeader>
-                                            <AlertDialogTitle>
-                                              {editingRecord
-                                                ? "ยืนยันการบันทึกการแก้ไข"
-                                                : "ยืนยันการบันทึกข้อมูล"}
-                                            </AlertDialogTitle>
-                                            <AlertDialogDescription>
-                                              {`ระบบจะบันทึกข้อมูล NCD สำหรับ ${currentLocationLabel} · เดือน ${currentPeriodLabel}`}
-                                            </AlertDialogDescription>
-                                          </AlertDialogHeader>
-                                          <AlertDialogFooter>
-                                            <AlertDialogCancel>
-                                              ยกเลิก
-                                            </AlertDialogCancel>
-                                            <AlertDialogAction
+                                        ) : (
+                                          <Button
+                                            type="button"
+                                            variant="outline"
+                                            className="sm:w-auto w-full"
+                                            onClick={() => {
+                                              setSearchFeedback({
+                                                status: "idle",
+                                              });
+                                              resetFormForNewEntry(
+                                                {
+                                                  targetGroup: targetGroupValue,
+                                                  year: currentThaiYear,
+                                                  month: currentMonth,
+                                                  district: "",
+                                                  subdistrict: "",
+                                                  village: "",
+                                                  moo: "",
+                                                },
+                                                { unlock: true }
+                                              );
+                                            }}
+                                          >
+                                            ล้างฟอร์ม
+                                          </Button>
+                                        )}
+                                        <AlertDialog>
+                                          <AlertDialogTrigger asChild>
+                                            <Button
+                                              type="button"
+                                              className="gap-2 sm:w-auto w-full"
                                               disabled={
-                                                saveNcdMutation.isPending
-                                              }
-                                              onClick={() =>
-                                                form.handleSubmit(onSubmit)()
+                                                saveNcdMutation.isPending ||
+                                                referralNeedsAttention
                                               }
                                             >
+                                              {saveNcdMutation.isPending && (
+                                                <Loader2 className="w-4 h-4 animate-spin" />
+                                              )}
                                               {editingRecord
-                                                ? "ยืนยันการแก้ไข"
-                                                : "ยืนยันการบันทึก"}
-                                            </AlertDialogAction>
-                                          </AlertDialogFooter>
-                                        </AlertDialogContent>
-                                      </AlertDialog>
+                                                ? "บันทึกการแก้ไข"
+                                                : "บันทึกข้อมูล"}
+                                            </Button>
+                                          </AlertDialogTrigger>
+                                          <AlertDialogContent>
+                                            <AlertDialogHeader>
+                                              <AlertDialogTitle>
+                                                {editingRecord
+                                                  ? "ยืนยันการบันทึกการแก้ไข"
+                                                  : "ยืนยันการบันทึกข้อมูล"}
+                                              </AlertDialogTitle>
+                                              <AlertDialogDescription>
+                                                {`ระบบจะบันทึกข้อมูล NCD สำหรับ ${currentLocationLabel} · เดือน ${currentPeriodLabel}`}
+                                              </AlertDialogDescription>
+                                            </AlertDialogHeader>
+                                            <AlertDialogFooter>
+                                              <AlertDialogCancel>
+                                                ยกเลิก
+                                              </AlertDialogCancel>
+                                              <AlertDialogAction
+                                                disabled={
+                                                  saveNcdMutation.isPending
+                                                }
+                                                onClick={() =>
+                                                  form.handleSubmit(onSubmit)()
+                                                }
+                                              >
+                                                {editingRecord
+                                                  ? "ยืนยันการแก้ไข"
+                                                  : "ยืนยันการบันทึก"}
+                                              </AlertDialogAction>
+                                            </AlertDialogFooter>
+                                          </AlertDialogContent>
+                                        </AlertDialog>
+                                        {editingRecord ? (
+                                          <Button
+                                            type="button"
+                                            variant="secondary"
+                                            className="gap-2 sm:w-auto w-full"
+                                            disabled={
+                                              recordAdjustmentMutation.isPending ||
+                                              referralNeedsAttention
+                                            }
+                                            onClick={handleOpenAdjustmentDialog}
+                                          >
+                                            {recordAdjustmentMutation.isPending ? (
+                                              <Loader2 className="h-4 w-4 animate-spin" />
+                                            ) : (
+                                              <ActivitySquare className="h-4 w-4" />
+                                            )}
+                                            บันทึกเป็นการปรับยอด
+                                          </Button>
+                                        ) : null}
+                                      </div>
+                                      {editingRecord ? (
+                                        <Dialog
+                                          open={adjustmentDialogOpen}
+                                          onOpenChange={(open) => {
+                                            if (!open) {
+                                              handleCloseAdjustmentDialog();
+                                            }
+                                          }}
+                                        >
+                                          <DialogContent className="sm:max-w-xl">
+                                            <DialogHeader>
+                                              <DialogTitle>ยืนยันการปรับยอดรายเดือน</DialogTitle>
+                                              <DialogDescription>
+                                                {`ระบบจะบันทึกยอดปรับสำหรับ ${currentLocationLabel} · เดือน ${currentPeriodLabel}`}
+                                              </DialogDescription>
+                                            </DialogHeader>
+                                            {pendingAdjustmentValues ? (
+                                              <div className="space-y-4">
+                                                {pendingAdjustmentHasChange ? (
+                                                  <div className="rounded-md border bg-muted/30 p-3 text-sm">
+                                                    <p className="font-semibold">
+                                                      รายการปรับ
+                                                    </p>
+                                                    <ul className="mt-2 space-y-2">
+                                                      {adjustmentSummaryRows.map((row) => {
+                                                        const totalBaseline =
+                                                          Number(row.baseline?.normal || 0) +
+                                                          Number(row.baseline?.risk || 0) +
+                                                          Number(row.baseline?.sick || 0);
+                                                        const totalProposed =
+                                                          Number(row.proposed?.normal || 0) +
+                                                          Number(row.proposed?.risk || 0) +
+                                                          Number(row.proposed?.sick || 0);
+                                                        const totalDiff = totalProposed - totalBaseline;
+                                                        return (
+                                                          <li key={row.key} className="flex flex-col gap-1">
+                                                            <span className="font-medium">
+                                                              {row.title}
+                                                            </span>
+                                                            <span className="text-xs text-muted-foreground">
+                                                              ปกติ {formatDelta(row.diff.normal)} · เสี่ยง {formatDelta(row.diff.risk)} · ป่วย {formatDelta(row.diff.sick)} (รวม {formatDelta(totalDiff)})
+                                                            </span>
+                                                          </li>
+                                                        );
+                                                      })}
+                                                    </ul>
+                                                  </div>
+                                                ) : (
+                                                  <Alert variant="destructive">
+                                                    <AlertTitle>ไม่มีการเปลี่ยนแปลง</AlertTitle>
+                                                    <AlertDescription>
+                                                      ปรับค่าตัวเลขก่อนยืนยันการบันทึก
+                                                    </AlertDescription>
+                                                  </Alert>
+                                                )}
+                                                <div className="space-y-2">
+                                                  <Label htmlFor="adjustment-reason-input">
+                                                    หมายเหตุ (ไม่บังคับ)
+                                                  </Label>
+                                                  <textarea
+                                                    id="adjustment-reason-input"
+                                                    className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    placeholder="ระบุสาเหตุ เช่น ผู้ป่วยหายดี / คีย์ข้อมูลเกิน"
+                                                    value={adjustmentReason}
+                                                    onChange={(event) =>
+                                                      setAdjustmentReason(event.target.value)
+                                                    }
+                                                  />
+                                                  <p className="text-xs text-muted-foreground">
+                                                    ข้อความนี้จะถูกบันทึกในประวัติการปรับยอด
+                                                  </p>
+                                                </div>
+                                              </div>
+                                            ) : (
+                                              <LoadingState message="กำลังเตรียมข้อมูลการปรับ..." />
+                                            )}
+                                            <DialogFooter>
+                                              <DialogClose asChild>
+                                                <Button type="button" variant="outline">
+                                                  ยกเลิก
+                                                </Button>
+                                              </DialogClose>
+                                              <Button
+                                                type="button"
+                                                className="gap-2"
+                                                onClick={handleConfirmAdjustment}
+                                                disabled={
+                                                  recordAdjustmentMutation.isPending ||
+                                                  !pendingAdjustmentHasChange
+                                                }
+                                              >
+                                                {recordAdjustmentMutation.isPending ? (
+                                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                                ) : (
+                                                  <ActivitySquare className="h-4 w-4" />
+                                                )}
+                                                ยืนยันการปรับยอด
+                                              </Button>
+                                            </DialogFooter>
+                                          </DialogContent>
+                                        </Dialog>
+                                      ) : null}
                                     </>
                                   ) : (
                                     <Button
@@ -2029,13 +2416,36 @@ const Admin = ({
                   ) : (
                     <div className="grid gap-4">
                       {ncdRecords.map((record) => {
-                        const overview = record.metrics.Overview ?? {
+                        const baselineMetrics = record.baselineMetrics ?? record.metrics;
+                        const adjustedMetrics = record.adjustedMetrics ?? baselineMetrics;
+                        const aggregatedDiff = record.adjustments ?? emptyMetrics;
+                        const baselineOverview = baselineMetrics.Overview ?? {
                           normal: 0,
                           risk: 0,
                           sick: 0,
                         };
-                        const totalPeople =
-                          overview.normal + overview.risk + overview.sick;
+                        const adjustedOverview = adjustedMetrics.Overview ?? baselineOverview;
+                        const overviewDiff = {
+                          normal:
+                            Number(adjustedOverview.normal || 0) -
+                            Number(baselineOverview.normal || 0),
+                          risk:
+                            Number(adjustedOverview.risk || 0) -
+                            Number(baselineOverview.risk || 0),
+                          sick:
+                            Number(adjustedOverview.sick || 0) -
+                            Number(baselineOverview.sick || 0),
+                        };
+                        const totalBaseline =
+                          baselineOverview.normal +
+                          baselineOverview.risk +
+                          baselineOverview.sick;
+                        const totalAdjusted =
+                          adjustedOverview.normal +
+                          adjustedOverview.risk +
+                          adjustedOverview.sick;
+                        const totalPeople = totalAdjusted;
+                        const totalDiff = totalAdjusted - totalBaseline;
                         const referCount = record.referCount ?? 0;
                         const periodLabel =
                           record.periodLabel ??
@@ -2056,6 +2466,11 @@ const Admin = ({
                         if (record.moo) {
                           locationDetails.push(`หมู่ที่ ${record.moo}`);
                         }
+                        const adjustmentHistory = Array.isArray(record.adjustmentEntries)
+                          ? record.adjustmentEntries
+                          : [];
+                        const hasAdjustmentHistory = adjustmentHistory.length > 0;
+                        const hasAggregatedDiff = !isMetricsDiffEmpty(aggregatedDiff);
                         const detailLocationParts = buildLocationParts(
                           record.district,
                           record.subdistrict,
@@ -2086,21 +2501,34 @@ const Admin = ({
                         );
                         const detailMetricsRows = metricStepConfigs.map(
                           (metric) => {
-                            const values = record.metrics[metric.key] ?? {
+                            const baselineCategory = baselineMetrics[metric.key] ?? {
                               normal: 0,
                               risk: 0,
                               sick: 0,
                             };
-                            const normal = Number(values.normal ?? 0);
-                            const risk = Number(values.risk ?? 0);
-                            const sick = Number(values.sick ?? 0);
+                            const adjustedCategory = adjustedMetrics[metric.key] ?? baselineCategory;
+                            const diffCategory = aggregatedDiff[metric.key] ?? {
+                              normal: 0,
+                              risk: 0,
+                              sick: 0,
+                            };
+                            const baselineTotal =
+                              Number(baselineCategory.normal || 0) +
+                              Number(baselineCategory.risk || 0) +
+                              Number(baselineCategory.sick || 0);
+                            const adjustedTotal =
+                              Number(adjustedCategory.normal || 0) +
+                              Number(adjustedCategory.risk || 0) +
+                              Number(adjustedCategory.sick || 0);
                             return {
                               key: metric.key,
                               title: metric.title,
-                              normal,
-                              risk,
-                              sick,
-                              total: normal + risk + sick,
+                              baseline: baselineCategory,
+                              adjusted: adjustedCategory,
+                              diff: diffCategory,
+                              baselineTotal,
+                              adjustedTotal,
+                              totalDiff: adjustedTotal - baselineTotal,
                             };
                           }
                         );
@@ -2120,18 +2548,23 @@ const Admin = ({
                                         "-"}
                                     </Badge>
                                   </div>
-                                  <div className="space-y-1">
-                                    <p className="text-lg font-semibold">
-                                      {districtName}
+                                <div className="space-y-1">
+                                  <p className="text-lg font-semibold">
+                                    {districtName}
+                                  </p>
+                                  {locationDetails.length > 0 ? (
+                                    <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                                      <MapPin className="h-4 w-4 text-primary" />
+                                      {locationDetails.join(" · ")}
                                     </p>
-                                    {locationDetails.length > 0 ? (
-                                      <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                                        <MapPin className="h-4 w-4 text-primary" />
-                                        {locationDetails.join(" · ")}
-                                      </p>
-                                    ) : null}
-                                  </div>
+                                  ) : null}
+                                  {hasAggregatedDiff ? (
+                                    <p className="text-xs text-amber-600">
+                                      มีการปรับยอด {formatDelta(totalDiff)} คน (ก่อนปรับ {totalBaseline.toLocaleString()} → หลังปรับ {totalPeople.toLocaleString()})
+                                    </p>
+                                  ) : null}
                                 </div>
+                              </div>
                                 <div className="flex flex-col items-start gap-2 text-sm text-muted-foreground md:items-end">
                                   <span className="inline-flex items-center gap-2 text-left">
                                     <Clock3 className="h-4 w-4 text-primary" />
@@ -2161,24 +2594,39 @@ const Admin = ({
                                     ปกติ
                                   </p>
                                   <p className="text-lg font-semibold text-success">
-                                    {overview.normal.toLocaleString()}
+                                    {adjustedOverview.normal.toLocaleString()}
                                   </p>
+                                  {overviewDiff.normal !== 0 ? (
+                                    <p className="text-xs text-muted-foreground">
+                                      {formatDelta(overviewDiff.normal)}
+                                    </p>
+                                  ) : null}
                                 </div>
                                 <div className="rounded-md border bg-background p-3">
                                   <p className="text-xs text-muted-foreground">
                                     เสี่ยง
                                   </p>
                                   <p className="text-lg font-semibold text-warning">
-                                    {overview.risk.toLocaleString()}
+                                    {adjustedOverview.risk.toLocaleString()}
                                   </p>
+                                  {overviewDiff.risk !== 0 ? (
+                                    <p className="text-xs text-muted-foreground">
+                                      {formatDelta(overviewDiff.risk)}
+                                    </p>
+                                  ) : null}
                                 </div>
                                 <div className="rounded-md border bg-background p-3">
                                   <p className="text-xs text-muted-foreground">
                                     ป่วย
                                   </p>
                                   <p className="text-lg font-semibold text-destructive">
-                                    {overview.sick.toLocaleString()}
+                                    {adjustedOverview.sick.toLocaleString()}
                                   </p>
+                                  {overviewDiff.sick !== 0 ? (
+                                    <p className="text-xs text-muted-foreground">
+                                      {formatDelta(overviewDiff.sick)}
+                                    </p>
+                                  ) : null}
                                 </div>
                                 <div className="rounded-md border bg-background p-3">
                                   <p className="text-xs text-muted-foreground">
@@ -2187,6 +2635,11 @@ const Admin = ({
                                   <p className="text-lg font-semibold">
                                     {totalPeople.toLocaleString()}
                                   </p>
+                                  {totalDiff !== 0 ? (
+                                    <p className="text-xs text-muted-foreground">
+                                      {formatDelta(totalDiff)}
+                                    </p>
+                                  ) : null}
                                 </div>
                                 <div className="rounded-md border bg-background p-3">
                                   <p className="text-xs text-muted-foreground">
@@ -2288,16 +2741,16 @@ const Admin = ({
                                       <TableRow>
                                         <TableHead>กลุ่มโรค</TableHead>
                                         <TableHead className="text-right">
-                                          ปกติ
+                                          ปกติ (หลังปรับ)
                                         </TableHead>
                                         <TableHead className="text-right">
-                                          เสี่ยง
+                                          เสี่ยง (หลังปรับ)
                                         </TableHead>
                                         <TableHead className="text-right">
-                                          ป่วย
+                                          ป่วย (หลังปรับ)
                                         </TableHead>
                                         <TableHead className="text-right">
-                                          รวม
+                                          รวม (หลังปรับ)
                                         </TableHead>
                                       </TableRow>
                                     </TableHeader>
@@ -2308,22 +2761,98 @@ const Admin = ({
                                             {metric.title}
                                           </TableCell>
                                           <TableCell className="text-right">
-                                            {metric.normal.toLocaleString()}
+                                            {Number(metric.adjusted.normal || 0).toLocaleString()}
+                                            {Number(metric.diff.normal || 0) !== 0 ? (
+                                              <div className="text-xs text-muted-foreground">
+                                                {formatDelta(metric.diff.normal)} (เดิม {Number(metric.baseline.normal || 0).toLocaleString()})
+                                              </div>
+                                            ) : null}
                                           </TableCell>
                                           <TableCell className="text-right">
-                                            {metric.risk.toLocaleString()}
+                                            {Number(metric.adjusted.risk || 0).toLocaleString()}
+                                            {Number(metric.diff.risk || 0) !== 0 ? (
+                                              <div className="text-xs text-muted-foreground">
+                                                {formatDelta(metric.diff.risk)} (เดิม {Number(metric.baseline.risk || 0).toLocaleString()})
+                                              </div>
+                                            ) : null}
                                           </TableCell>
                                           <TableCell className="text-right">
-                                            {metric.sick.toLocaleString()}
+                                            {Number(metric.adjusted.sick || 0).toLocaleString()}
+                                            {Number(metric.diff.sick || 0) !== 0 ? (
+                                              <div className="text-xs text-muted-foreground">
+                                                {formatDelta(metric.diff.sick)} (เดิม {Number(metric.baseline.sick || 0).toLocaleString()})
+                                              </div>
+                                            ) : null}
                                           </TableCell>
                                           <TableCell className="text-right font-semibold">
-                                            {metric.total.toLocaleString()}
+                                            {Number(metric.adjustedTotal || 0).toLocaleString()}
+                                            {Number(metric.totalDiff || 0) !== 0 ? (
+                                              <div className="text-xs text-muted-foreground">
+                                                {formatDelta(metric.totalDiff)} (เดิม {Number(metric.baselineTotal || 0).toLocaleString()})
+                                              </div>
+                                            ) : null}
                                           </TableCell>
                                         </TableRow>
                                       ))}
                                     </TableBody>
                                   </Table>
+                                  {hasAggregatedDiff ? (
+                                    <p className="text-xs text-muted-foreground">
+                                      รวมก่อนปรับ {totalBaseline.toLocaleString()} คน · หลังปรับ {totalPeople.toLocaleString()} คน ({formatDelta(totalDiff)})
+                                    </p>
+                                  ) : null}
                                 </div>
+                                {hasAdjustmentHistory ? (
+                                  <div className="space-y-3">
+                                    <p className="text-sm font-semibold">
+                                      ประวัติการปรับยอด
+                                    </p>
+                                    <div className="space-y-2">
+                                      {adjustmentHistory
+                                        .slice()
+                                        .reverse()
+                                        .map((entry) => {
+                                          const entryOverview = entry.diff?.Overview ?? {
+                                            normal: 0,
+                                            risk: 0,
+                                            sick: 0,
+                                          };
+                                          const entryTotal =
+                                            Number(entryOverview.normal || 0) +
+                                            Number(entryOverview.risk || 0) +
+                                            Number(entryOverview.sick || 0);
+                                          const entryTimestamp = formatRecordTimestamp(
+                                            entry.createdAt ?? null
+                                          );
+                                          return (
+                                            <div
+                                              key={entry.id}
+                                              className="rounded-md border bg-muted/10 p-3 text-xs sm:text-sm"
+                                            >
+                                              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                                                <span className="font-medium">
+                                                  {entryTimestamp}
+                                                </span>
+                                                <span className="text-muted-foreground">
+                                                  {entry.createdBy
+                                                    ? `โดย ${entry.createdBy}`
+                                                    : "ไม่ระบุผู้บันทึก"}
+                                                </span>
+                                              </div>
+                                              <p className="text-muted-foreground">
+                                                ปรับ {formatDelta(entryTotal)} คน (ปกติ {formatDelta(entryOverview.normal)}, เสี่ยง {formatDelta(entryOverview.risk)}, ป่วย {formatDelta(entryOverview.sick)})
+                                              </p>
+                                              {entry.reason ? (
+                                                <p className="text-muted-foreground">
+                                                  เหตุผล: {entry.reason}
+                                                </p>
+                                              ) : null}
+                                            </div>
+                                          );
+                                        })}
+                                    </div>
+                                  </div>
+                                ) : null}
                               </div>
                               <DialogFooter>
                                 <DialogClose asChild>
@@ -2835,117 +3364,113 @@ const Admin = ({
                     )}
                   </CardContent>
                 </Card>
-                <Dialog
-                  open={isPasswordDialogOpen}
-                  onOpenChange={(open) => {
-                    if (!open) {
-                      if (changePasswordMutation.isPending) {
-                        return;
-                      }
-                      closePasswordDialog();
-                    }
-                  }}
-                >
-                  <DialogContent className="sm:max-w-md">
-                    <DialogHeader>
-                      <DialogTitle className="flex items-center gap-2">
-                        <KeyRound className="h-5 w-5 text-primary" />
-                        เปลี่ยนรหัสผ่าน
-                      </DialogTitle>
-                      <DialogDescription className="text-sm text-muted-foreground">
-                        กำหนดรหัสผ่านใหม่สำหรับ{" "}
-                        <span className="font-medium text-foreground">
-                          {passwordDialogTargetName || "ผู้ใช้งาน"}
-                        </span>
-                      </DialogDescription>
-                    </DialogHeader>
-                    <form className="space-y-4" onSubmit={handlePasswordSubmit}>
-                      {passwordDialogRequiresCurrentPassword ? (
-                        <div className="space-y-1.5">
-                          <Label htmlFor="current-password">
-                            รหัสผ่านปัจจุบัน
-                          </Label>
-                          <Input
-                            id="current-password"
-                            type="password"
-                            autoComplete="current-password"
-                            value={passwordForm.currentPassword}
-                            onChange={(event) =>
-                              setPasswordForm((prev) => ({
-                                ...prev,
-                                currentPassword: event.target.value,
-                              }))
-                            }
-                            disabled={changePasswordMutation.isPending}
-                          />
-                        </div>
-                      ) : null}
-                      <div className="space-y-1.5">
-                        <Label htmlFor="new-password">รหัสผ่านใหม่</Label>
-                        <Input
-                          id="new-password"
-                          type="password"
-                          autoComplete="new-password"
-                          value={passwordForm.newPassword}
-                          onChange={(event) =>
-                            setPasswordForm((prev) => ({
-                              ...prev,
-                              newPassword: event.target.value,
-                            }))
-                          }
-                          disabled={changePasswordMutation.isPending}
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          {PASSWORD_POLICY_MESSAGE}
-                        </p>
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="confirm-password">
-                          ยืนยันรหัสผ่านใหม่
-                        </Label>
-                        <Input
-                          id="confirm-password"
-                          type="password"
-                          autoComplete="new-password"
-                          value={passwordForm.confirmPassword}
-                          onChange={(event) =>
-                            setPasswordForm((prev) => ({
-                              ...prev,
-                              confirmPassword: event.target.value,
-                            }))
-                          }
-                          disabled={changePasswordMutation.isPending}
-                        />
-                      </div>
-                      <DialogFooter className="gap-2 sm:gap-0">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={closePasswordDialog}
-                          disabled={changePasswordMutation.isPending}
-                        >
-                          ยกเลิก
-                        </Button>
-                        <Button
-                          type="submit"
-                          disabled={changePasswordMutation.isPending}
-                          className="flex items-center gap-2"
-                        >
-                          {changePasswordMutation.isPending ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <KeyRound className="h-4 w-4" />
-                          )}
-                          <span>บันทึกรหัสผ่าน</span>
-                        </Button>
-                      </DialogFooter>
-                    </form>
-                  </DialogContent>
-                </Dialog>
               </TabsContent>
             )}
           </Tabs>
         )}
+        <Dialog
+          open={isPasswordDialogOpen}
+          onOpenChange={(open) => {
+            if (!open) {
+              if (changePasswordMutation.isPending) {
+                return;
+              }
+              closePasswordDialog();
+            }
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <KeyRound className="h-5 w-5 text-primary" />
+                เปลี่ยนรหัสผ่าน
+              </DialogTitle>
+              <DialogDescription className="text-sm text-muted-foreground">
+                กำหนดรหัสผ่านใหม่สำหรับ{" "}
+                <span className="font-medium text-foreground">
+                  {passwordDialogTargetName || "ผู้ใช้งาน"}
+                </span>
+              </DialogDescription>
+            </DialogHeader>
+            <form className="space-y-4" onSubmit={handlePasswordSubmit}>
+              {passwordDialogRequiresCurrentPassword ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="current-password">รหัสผ่านปัจจุบัน</Label>
+                  <Input
+                    id="current-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={passwordForm.currentPassword}
+                    onChange={(event) =>
+                      setPasswordForm((prev) => ({
+                        ...prev,
+                        currentPassword: event.target.value,
+                      }))
+                    }
+                    disabled={changePasswordMutation.isPending}
+                  />
+                </div>
+              ) : null}
+              <div className="space-y-1.5">
+                <Label htmlFor="new-password">รหัสผ่านใหม่</Label>
+                <Input
+                  id="new-password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={passwordForm.newPassword}
+                  onChange={(event) =>
+                    setPasswordForm((prev) => ({
+                      ...prev,
+                      newPassword: event.target.value,
+                    }))
+                  }
+                  disabled={changePasswordMutation.isPending}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {PASSWORD_POLICY_MESSAGE}
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="confirm-password">ยืนยันรหัสผ่านใหม่</Label>
+                <Input
+                  id="confirm-password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={passwordForm.confirmPassword}
+                  onChange={(event) =>
+                    setPasswordForm((prev) => ({
+                      ...prev,
+                      confirmPassword: event.target.value,
+                    }))
+                  }
+                  disabled={changePasswordMutation.isPending}
+                />
+              </div>
+              <DialogFooter className="gap-2 sm:gap-0">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={closePasswordDialog}
+                  disabled={changePasswordMutation.isPending}
+                >
+                  ยกเลิก
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={changePasswordMutation.isPending}
+                  className="flex items-center gap-2"
+                >
+                  {changePasswordMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <KeyRound className="h-4 w-4" />
+                  )}
+                  <span>บันทึกรหัสผ่าน</span>
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
       </main>
     </div>
   );

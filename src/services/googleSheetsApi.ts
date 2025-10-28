@@ -222,6 +222,45 @@ export interface NcdMetrics {
   };
 }
 
+export interface RecordNcdAdjustmentPayload {
+  id?: string;
+  recordId?: string;
+  targetGroup?: string;
+  year: number;
+  month: number;
+  district: string;
+  subdistrict: string;
+  village: string;
+  moo?: string;
+  metrics: NcdMetrics;
+  reason?: string;
+}
+
+export interface RecordNcdAdjustmentResponse {
+  success: boolean;
+  message: string;
+  diff?: NcdMetrics;
+  record?: NcdRecord;
+}
+
+export interface NcdAdjustmentEntry {
+  id: string;
+  recordId?: string;
+  targetGroup?: string;
+  year?: number;
+  month?: number;
+  district?: string;
+  subdistrict?: string;
+  village?: string;
+  moo?: string;
+  diff: NcdMetrics;
+  baseline?: NcdMetrics;
+  proposed?: NcdMetrics;
+  reason?: string;
+  createdBy?: string;
+  createdAt?: string;
+}
+
 export interface UpsertNcdPayload {
   id?: string;
   targetGroup?: string;
@@ -242,6 +281,12 @@ export interface NcdRecord extends UpsertNcdPayload {
   periodKey?: string;
   periodLabel?: string;
   overviewTotal?: number;
+  baselineMetrics?: NcdMetrics;
+  adjustments?: NcdMetrics;
+  adjustedMetrics?: NcdMetrics;
+  baselineOverviewTotal?: number;
+  adjustedOverviewTotal?: number;
+  adjustmentEntries?: NcdAdjustmentEntry[];
   createdBy?: string;
   createdAt?: string | Date | null;
   updatedBy?: string;
@@ -866,6 +911,29 @@ class GoogleSheetsApiService {
     }
 
     return true;
+  }
+
+  async recordNcdAdjustment(
+    payload: RecordNcdAdjustmentPayload
+  ): Promise<RecordNcdAdjustmentResponse> {
+    const result = await this.fetchData<RecordNcdAdjustmentResponse & {
+      success: boolean;
+      message?: string;
+      record?: NcdRecord;
+      diff?: NcdMetrics;
+    }>("recordNcdAdjustment", payload);
+
+    if (!result.success) {
+      this.handleAuthorizationFailure(result.message);
+      throw new Error(result.message || "ไม่สามารถปรับยอดได้");
+    }
+
+    return {
+      success: true,
+      message: result.message || "บันทึกการปรับยอดเรียบร้อย",
+      diff: result.diff,
+      record: result.record,
+    };
   }
 
   async getUsers(params: GetUsersParams = {}): Promise<UsersListResponse> {
