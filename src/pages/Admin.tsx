@@ -82,10 +82,20 @@ import {
 } from "@/components/ui/table";
 import { useAuth } from "@/contexts/useAuth";
 import {
+  METRIC_CATEGORY_VALUES,
+  METRIC_STATUS_VALUES,
+  computeMetricsDiff as computeMetricsDiffHelper,
+  deriveBaselineMetrics,
+  isMetricsDiffEmpty as isMetricsDiffEmptyHelper,
+  type MetricCategoryKey,
+  type MetricFieldKey,
+} from "@/lib/ncdMetrics";
+import {
   googleSheetsApi,
   type DistrictsMapping,
   type ManagedUser,
   type NcdMetrics,
+  type NcdAdjustmentEntry,
   type NcdRecord,
   type UsersListResponse,
   type UserRole,
@@ -108,22 +118,6 @@ const metricsSchema = z.object({
   Alcohol: metricSchema,
   Smoking: metricSchema,
 });
-
-const METRIC_CATEGORY_VALUES = [
-  "Overview",
-  "Obesity",
-  "Diabetes",
-  "Hypertension",
-  "Mental",
-  "Alcohol",
-  "Smoking",
-] as const;
-
-const METRIC_STATUS_VALUES = ["normal", "risk", "sick"] as const;
-
-
-
-
 
 const ncdFormSchema = z.object({
   id: z.string().optional(),
@@ -160,9 +154,6 @@ const emptyMetrics: NcdFormValues["metrics"] = {
   Alcohol: { normal: 0, risk: 0, sick: 0 },
   Smoking: { normal: 0, risk: 0, sick: 0 },
 };
-
-type MetricCategoryKey = keyof NcdFormValues["metrics"];
-type MetricFieldKey = keyof NcdFormValues["metrics"]["Overview"];
 
 type MetricStepConfig = {
   type: "metric";
@@ -241,6 +232,20 @@ const metricStepKeys = metricStepConfigs.map((step) => step.key);
 const metricStepKeysWithoutOverview = metricStepKeys.filter(
   (key) => key !== "Overview"
 );
+
+const metricConfigMap = metricStepConfigs.reduce(
+  (acc, step) => {
+    acc[step.key] = step;
+    return acc;
+  },
+  {} as Record<MetricCategoryKey, MetricStepConfig>
+);
+
+const METRIC_STATUS_LABELS: Record<MetricFieldKey, string> = {
+  normal: "ปกติ",
+  risk: "เสี่ยง",
+  sick: "ป่วย",
+};
 
 const METRIC_FIELDS: Array<{
   key: MetricFieldKey;
@@ -1070,12 +1075,138 @@ const Admin = ({
       values.referCount = 0;
     }
 
-    saveNcdMutation.mutate(values);
+    const hasExistingRecord = Boolean(editingRecord?.id);
+    const adjustments = hasExistingRecord ? editingRecord?.adjustments : undefined;
+    const { baseline: metricsForSave, invalidEntries } = deriveBaselineMetrics({
+      adjusted: values.metrics,
+      adjustments,
+      categories: METRIC_CATEGORY_VALUES,
+      statuses: METRIC_STATUS_VALUES,
+    });
+
+    if (invalidEntries.length > 0) {
+      const invalidFields = invalidEntries.map(({ category, status }) => {
+        const categoryLabel =
+          metricConfigMap[category as MetricCategoryKey]?.title ?? category;
+        const statusLabel = METRIC_STATUS_LABELS[status];
+        return `${categoryLabel} (${statusLabel})`;
+      });
+      toast.error(
+        `ไม่สามารถบันทึกได้ เนื่องจากยอดใหม่ต่ำกว่ายอดหลังปรับในรายการต่อไปนี้: ${invalidFields.join(
+          ", "
+        )} กรุณาปรับตัวเลขหรือย้อนกลับการปรับยอดก่อน`
+      );
+      return;
+    }
+
+    saveNcdMutation.mutate({
+      ...values,
+      metrics: metricsForSave,
+    });
   };
 
   const handleEditRecord = (record: NcdRecord) => {
     setEditingRecord(record);
     setFormUnlocked(true);
+    const coerceMetricCandidate = (value: unknown): number | null => {
+      if (value === null || value === undefined) {
+        return null;
+      }
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (!trimmed) {
+          return null;
+        }
+        const sanitized = trimmed.replace(/,/g, "");
+        const parsed = Number(sanitized);
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+      if (typeof value === "number") {
+        return Number.isFinite(value) ? value : null;
+      }
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    };
+    const emptyCategory = (): Record<MetricFieldKey, number> => ({
+      normal: 0,
+      risk: 0,
+      sick: 0,
+    });
+    const normalizeMetric = (
+      value: unknown,
+      { allowNegative = false }: { allowNegative?: boolean } = {}
+    ): number => {
+      const numeric = coerceMetricCandidate(value);
+      if (numeric === null) {
+        return 0;
+      }
+      const integer = Number.isFinite(numeric)
+        ? Math.trunc(numeric)
+        : 0;
+      if (allowNegative) {
+        return integer;
+      }
+      return Math.max(0, integer);
+    };
+    const normalizeCategory = (
+      source: Record<string, unknown> | undefined,
+      options?: { allowNegative?: boolean }
+    ): Record<MetricFieldKey, number> => {
+      if (!source || typeof source !== "object") {
+        return emptyCategory();
+      }
+      const recordSource = source as Record<string, unknown>;
+      return {
+        normal: normalizeMetric(recordSource.normal, options),
+        risk: normalizeMetric(recordSource.risk, options),
+        sick: normalizeMetric(recordSource.sick, options),
+      };
+    };
+    const addCategories = (
+      base: Record<MetricFieldKey, number>,
+      diff: Record<MetricFieldKey, number>
+    ): Record<MetricFieldKey, number> => ({
+      normal: Math.max(0, base.normal + diff.normal),
+      risk: Math.max(0, base.risk + diff.risk),
+      sick: Math.max(0, base.sick + diff.sick),
+    });
+    const deriveCategoryValues = (key: MetricCategoryKey) => {
+      const adjusted = normalizeCategory(
+        record.adjustedMetrics?.[key] as Record<string, unknown> | undefined
+      );
+      const adjustments = normalizeCategory(
+        record.adjustments?.[key] as Record<string, unknown> | undefined,
+        { allowNegative: true }
+      );
+      const baselineSource =
+        (record.baselineMetrics?.[key] as Record<string, unknown> | undefined) ??
+        (record.metrics?.[key] as Record<string, unknown> | undefined);
+      const baseline = normalizeCategory(baselineSource);
+
+      const adjustedHasValue =
+        adjusted.normal > 0 || adjusted.risk > 0 || adjusted.sick > 0;
+      if (adjustedHasValue) {
+        return adjusted;
+      }
+
+      const diffHasValue =
+        adjustments.normal !== 0 || adjustments.risk !== 0 || adjustments.sick !== 0;
+      if (diffHasValue) {
+        return addCategories(baseline, adjustments);
+      }
+
+      if (
+        baseline.normal !== 0 ||
+        baseline.risk !== 0 ||
+        baseline.sick !== 0
+      ) {
+        return baseline;
+      }
+
+      return emptyCategory();
+    };
+    const buildCategoryMetrics = (categoryKey: MetricCategoryKey) =>
+      deriveCategoryValues(categoryKey);
     const locationText = buildLocationParts(
       record.district,
       record.subdistrict,
@@ -1099,17 +1230,13 @@ const Admin = ({
       moo: record.moo ?? "",
       referCount: record.referCount ?? 0,
       metrics: {
-        Overview: record.metrics.Overview ?? { normal: 0, risk: 0, sick: 0 },
-        Obesity: record.metrics.Obesity ?? { normal: 0, risk: 0, sick: 0 },
-        Diabetes: record.metrics.Diabetes ?? { normal: 0, risk: 0, sick: 0 },
-        Hypertension: record.metrics.Hypertension ?? {
-          normal: 0,
-          risk: 0,
-          sick: 0,
-        },
-        Mental: record.metrics.Mental ?? { normal: 0, risk: 0, sick: 0 },
-        Alcohol: record.metrics.Alcohol ?? { normal: 0, risk: 0, sick: 0 },
-        Smoking: record.metrics.Smoking ?? { normal: 0, risk: 0, sick: 0 },
+        Overview: buildCategoryMetrics("Overview"),
+        Obesity: buildCategoryMetrics("Obesity"),
+        Diabetes: buildCategoryMetrics("Diabetes"),
+        Hypertension: buildCategoryMetrics("Hypertension"),
+        Mental: buildCategoryMetrics("Mental"),
+        Alcohol: buildCategoryMetrics("Alcohol"),
+        Smoking: buildCategoryMetrics("Smoking"),
       },
     });
     setHasReferral((record.referCount ?? 0) > 0);
@@ -1133,46 +1260,21 @@ const Admin = ({
   };
 
   const computeMetricsDiff = useCallback(
-    (baseline: NcdMetrics | undefined, proposed: NcdMetrics): NcdMetrics => {
-      const diff: NcdMetrics = {};
-      metricStepKeys.forEach((key) => {
-        const baselineCategory = baseline?.[key] ?? emptyMetrics[key];
-        const proposedCategory = proposed?.[key] ?? emptyMetrics[key];
-        diff[key] = {
-          normal:
-            Number(proposedCategory?.normal ?? 0) -
-            Number(baselineCategory?.normal ?? 0),
-          risk:
-            Number(proposedCategory?.risk ?? 0) -
-            Number(baselineCategory?.risk ?? 0),
-          sick:
-            Number(proposedCategory?.sick ?? 0) -
-            Number(baselineCategory?.sick ?? 0),
-        };
-      });
-      return diff;
-    },
-    []
+    (baseline: NcdMetrics | undefined, proposed: NcdMetrics): NcdMetrics =>
+      computeMetricsDiffHelper(baseline, proposed, {
+        categories: metricStepKeys,
+        statuses: METRIC_STATUS_VALUES,
+      }),
+    [metricStepKeys]
   );
 
   const isMetricsDiffEmpty = useCallback(
-    (diff: NcdMetrics | null | undefined) => {
-      if (!diff) {
-        return true;
-      }
-      return metricStepKeys.every((key) => {
-        const category = diff[key];
-        if (!category) {
-          return true;
-        }
-        return (
-          Number(category.normal || 0) === 0 &&
-          Number(category.risk || 0) === 0 &&
-          Number(category.sick || 0) === 0
-        );
-      });
-    },
-    []
+    (diff: NcdMetrics | null | undefined) =>
+      isMetricsDiffEmptyHelper(diff, {
+        categories: metricStepKeys,
+        statuses: METRIC_STATUS_VALUES,
+      }),
+    [metricStepKeys]
   );
 
   const [adjustmentDialogOpen, setAdjustmentDialogOpen] = useState(false);
@@ -1418,6 +1520,91 @@ const Admin = ({
     records.sort((a, b) => resolveTimestamp(b) - resolveTimestamp(a));
     return records;
   }, [rawNcdRecords]);
+  const latestAdjustmentEntries = useMemo(() => {
+    const entries: Array<{
+      id: string;
+      createdAt: string | Date | null;
+      createdBy?: string | null;
+      reason?: string | null;
+      diff: { normal: number; risk: number; sick: number; total: number };
+      location: string;
+    }> = [];
+    const seen = new Set<string>();
+
+    ncdRecords.forEach((record) => {
+      const history = Array.isArray(record.adjustmentEntries)
+        ? (record.adjustmentEntries as NcdAdjustmentEntry[])
+        : [];
+
+      history.forEach((entry) => {
+        const key =
+          entry.id ||
+          `${record.id ?? record.periodLabel ?? "record"}-${entry.createdAt ?? ""}`;
+
+        if (seen.has(key)) {
+          return;
+        }
+        seen.add(key);
+
+        const overview =
+          entry.diff?.Overview ??
+          entry.diff?.overview ??
+          entry.diff?.Total ??
+          entry.diff?.total;
+
+        const normal = Number(overview?.normal ?? 0);
+        const risk = Number(overview?.risk ?? 0);
+        const sick = Number(overview?.sick ?? 0);
+        const total = normal + risk + sick;
+
+        const locationParts: string[] = [];
+        const village = entry.village ?? record.village;
+        const moo = entry.moo ?? record.moo;
+        const subdistrict = entry.subdistrict ?? record.subdistrict;
+        const district = entry.district ?? record.district;
+
+        if (village) {
+          locationParts.push(village);
+        }
+        if (moo) {
+          locationParts.push(`หมู่ที่ ${moo}`);
+        }
+        if (subdistrict) {
+          locationParts.push(`ตำบล ${subdistrict}`);
+        }
+        if (district) {
+          locationParts.push(`อำเภอ ${district}`);
+        }
+
+        entries.push({
+          id: key,
+          createdAt: entry.createdAt ?? record.updatedAt ?? record.createdAt ?? null,
+          createdBy: entry.createdBy ?? record.updatedBy ?? record.createdBy ?? null,
+          reason: entry.reason ?? "",
+          diff: { normal, risk, sick, total },
+          location: locationParts.length ? locationParts.join(" • ") : "ไม่พบข้อมูลพื้นที่",
+        });
+      });
+    });
+
+    const resolveTime = (value: string | Date | null) => {
+      if (!value) {
+        return 0;
+      }
+      if (value instanceof Date) {
+        return value.getTime();
+      }
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+    };
+
+    entries.sort((a, b) => resolveTime(b.createdAt) - resolveTime(a.createdAt));
+    return entries;
+  }, [ncdRecords]);
+  const latestAdjustments = useMemo(
+    () => latestAdjustmentEntries.slice(0, 6),
+    [latestAdjustmentEntries]
+  );
   const ncdTotalCount = ncdPagination?.total ?? 0;
   const latestShowingCount = ncdRecords.length;
   const targetGroupDisplay =
@@ -1565,6 +1752,60 @@ const Admin = ({
             </TabsList>
 
             <TabsContent value="data" className="space-y-6">
+              {latestAdjustments.length ? (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="flex items-center gap-2">
+                      <Clock3 className="w-4 h-4 text-primary" />
+                      ประวัติการปรับยอดล่าสุด
+                    </CardTitle>
+                    <CardDescription>
+                      แสดง {latestAdjustments.length.toLocaleString()} รายการล่าสุดจาก{" "}
+                      {latestAdjustmentEntries.length.toLocaleString()} การปรับยอด
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {latestAdjustments.map((entry) => {
+                      const toneClass =
+                        entry.diff.total > 0
+                          ? "text-success"
+                          : entry.diff.total < 0
+                          ? "text-destructive"
+                          : "text-muted-foreground";
+
+                      return (
+                        <div
+                          key={entry.id}
+                          className="space-y-2 rounded-md border bg-muted/20 p-3 text-sm"
+                        >
+                          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                            <span className="font-medium">
+                              {formatRecordTimestamp(entry.createdAt)}
+                            </span>
+                            <span className={`font-semibold ${toneClass}`}>
+                              {formatDelta(entry.diff.total)}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                            <span>{entry.location}</span>
+                            {entry.createdBy ? <span>โดย {entry.createdBy}</span> : null}
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            ปกติ {formatDelta(entry.diff.normal)} · เสี่ยง {formatDelta(entry.diff.risk)} · ป่วย{" "}
+                            {formatDelta(entry.diff.sick)}
+                          </p>
+                          {entry.reason ? (
+                            <p className="text-xs text-muted-foreground">
+                              เหตุผล: {entry.reason}
+                            </p>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </CardContent>
+                </Card>
+              ) : null}
+
               <Card
                 className={
                   editingRecord ? "border-amber-200 bg-amber-50/40" : undefined

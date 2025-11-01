@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ActivitySquare,
@@ -32,6 +32,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -41,8 +42,14 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/contexts/useAuth";
-import { googleSheetsApi, type DashboardDetailRow } from "@/services/googleSheetsApi";
+import {
+  googleSheetsApi,
+  type DashboardDetailRow,
+  type NcdAdjustmentEntry,
+  type NcdMetrics,
+} from "@/services/googleSheetsApi";
 import { getCombinedQueryState } from "@/lib/queryState";
 import { StatsCard } from "@/components/StatsCard";
 import { Separator } from "@/components/ui/separator";
@@ -101,11 +108,14 @@ const MAX_BACKGROUND_PAGES = 50;
 const Detail = () => {
   const { user } = useAuth();
   const [currentFilters, setCurrentFilters] = useState<DetailFilters>(initialFilters);
-  const [appliedFilters, setAppliedFilters] = useState<DetailFilters | null>(null);
+  const [appliedFilters, setAppliedFilters] = useState<DetailFilters>(initialFilters);
   const [recordsPage, setRecordsPage] = useState(1);
   const recordsLimit = 50;
   const [searchParams] = useSearchParams();
   const lastAppliedQueryRef = useRef<string | null>(null);
+  const [factorView, setFactorView] = useState<"absolute" | "percentage">("absolute");
+  const [locationSearchTerm, setLocationSearchTerm] = useState("");
+  const [showReferMetrics, setShowReferMetrics] = useState(true);
 
   useEffect(() => {
     if (user?.role === "officer" && user.district) {
@@ -161,95 +171,152 @@ const Detail = () => {
     lastAppliedQueryRef.current = queryString;
   }, [searchParams]);
 
-  const availabilityQuery = useQuery({
-    queryKey: ["detail", "availability", currentFilters.targetGroup],
-    queryFn: () =>
-      googleSheetsApi.getDashboardData({
-        targetGroup: currentFilters.targetGroup,
-      }),
-    select: (response) => response?.availability,
-    staleTime: DETAIL_STALE_TIME,
-    gcTime: DETAIL_GC_TIME,
-  });
-
   const districtsQuery = useQuery({
     queryKey: ["districts"],
     queryFn: () => googleSheetsApi.getDistricts(),
   });
 
   const detailQuery = useQuery({
-    enabled: !!appliedFilters,
     queryKey: [
       "detail",
-      appliedFilters?.targetGroup ?? "all",
-      appliedFilters?.district || "all",
-      appliedFilters?.subdistrict || "all",
-      appliedFilters?.village || "all",
-      appliedFilters?.year || "all-year",
-      appliedFilters?.month || "all-month",
-      appliedFilters?.moo || "all-moo",
+      appliedFilters.targetGroup || "all",
+      appliedFilters.district || "all",
+      appliedFilters.subdistrict || "all",
+      appliedFilters.village || "all",
+      appliedFilters.year || "all-year",
+      appliedFilters.month || "all-month",
+      appliedFilters.moo || "all-moo",
     ],
-    queryFn: () =>
-      googleSheetsApi.getDashboardData({
-        targetGroup: appliedFilters!.targetGroup,
-        district: appliedFilters!.district || undefined,
-        subdistrict: appliedFilters!.subdistrict || undefined,
-        village: appliedFilters!.village || undefined,
-        moo: appliedFilters!.moo || undefined,
-        year: appliedFilters!.year ? Number(appliedFilters!.year) : undefined,
-        month: appliedFilters!.month ? Number(appliedFilters!.month) : undefined,
-      }),
+    queryFn: ({ signal }) =>
+      googleSheetsApi.getDashboardData(
+        {
+          targetGroup: appliedFilters.targetGroup,
+          district: appliedFilters.district || undefined,
+          subdistrict: appliedFilters.subdistrict || undefined,
+          village: appliedFilters.village || undefined,
+          moo: appliedFilters.moo || undefined,
+          year: appliedFilters.year ? Number(appliedFilters.year) : undefined,
+          month: appliedFilters.month ? Number(appliedFilters.month) : undefined,
+        },
+        { signal }
+      ),
     staleTime: DETAIL_STALE_TIME,
     gcTime: DETAIL_GC_TIME,
   });
 
   const data = detailQuery.data;
-  const availability = data?.availability ?? availabilityQuery.data;
+  const availability = data?.availability;
   const isError = detailQuery.isError;
+
+  const summary = data?.summary;
+  const adjustmentsSummary = data?.adjustments?.summary;
+  const toValidNumber = (value: unknown): number => {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
+  };
+  const clampNonNegative = (value: number): number => (value < 0 ? 0 : value);
+  const fallbackAdjustedTotals = useMemo(() => {
+    if (adjustmentsSummary?.adjusted) {
+      return {
+        normal: toValidNumber(adjustmentsSummary.adjusted.normal),
+        risk: toValidNumber(adjustmentsSummary.adjusted.risk),
+        sick: toValidNumber(adjustmentsSummary.adjusted.sick),
+        total: toValidNumber(adjustmentsSummary.adjusted.total),
+      };
+    }
+    return {
+      normal: toValidNumber(summary?.normal),
+      risk: toValidNumber(summary?.risk),
+      sick: toValidNumber(summary?.sick),
+      total: toValidNumber(summary?.total),
+    };
+  }, [adjustmentsSummary?.adjusted, summary?.normal, summary?.risk, summary?.sick, summary?.total]);
+
+  const fallbackBaselineTotals = useMemo(() => {
+    if (adjustmentsSummary?.baseline) {
+      return {
+        normal: toValidNumber(adjustmentsSummary.baseline.normal),
+        risk: toValidNumber(adjustmentsSummary.baseline.risk),
+        sick: toValidNumber(adjustmentsSummary.baseline.sick),
+        total: toValidNumber(adjustmentsSummary.baseline.total),
+      };
+    }
+    return {
+      normal: toValidNumber(summary?.normal),
+      risk: toValidNumber(summary?.risk),
+      sick: toValidNumber(summary?.sick),
+      total: toValidNumber(summary?.total),
+    };
+  }, [adjustmentsSummary?.baseline, summary?.normal, summary?.risk, summary?.sick, summary?.total]);
+
+  const fallbackDiffTotals = useMemo(() => {
+    if (adjustmentsSummary?.diff) {
+      return {
+        normal: toValidNumber(adjustmentsSummary.diff.normal),
+        risk: toValidNumber(adjustmentsSummary.diff.risk),
+        sick: toValidNumber(adjustmentsSummary.diff.sick),
+        total: toValidNumber(adjustmentsSummary.diff.total),
+      };
+    }
+    return {
+      normal: fallbackAdjustedTotals.normal - fallbackBaselineTotals.normal,
+      risk: fallbackAdjustedTotals.risk - fallbackBaselineTotals.risk,
+      sick: fallbackAdjustedTotals.sick - fallbackBaselineTotals.sick,
+      total: fallbackAdjustedTotals.total - fallbackBaselineTotals.total,
+    };
+  }, [adjustmentsSummary?.diff, fallbackAdjustedTotals, fallbackBaselineTotals]);
 
   const recordsQuery = useQuery({
     enabled: !!appliedFilters,
     queryKey: [
       "detail-records",
-      appliedFilters?.targetGroup ?? "all",
-      appliedFilters?.district || "all",
-      appliedFilters?.subdistrict || "all",
-      appliedFilters?.village || "all",
-      appliedFilters?.year || "all-year",
-      appliedFilters?.month || "all-month",
-      appliedFilters?.moo || "all-moo",
+      appliedFilters.targetGroup || "all",
+      appliedFilters.district || "all",
+      appliedFilters.subdistrict || "all",
+      appliedFilters.village || "all",
+      appliedFilters.year || "all-year",
+      appliedFilters.month || "all-month",
+      appliedFilters.moo || "all-moo",
       recordsPage,
       recordsLimit,
     ],
-    queryFn: () =>
-      googleSheetsApi.getNcdRecords({
-        targetGroup: appliedFilters!.targetGroup,
-        district: appliedFilters!.district || undefined,
-        subdistrict: appliedFilters!.subdistrict || undefined,
-        village: appliedFilters!.village || undefined,
-        moo: appliedFilters!.moo || undefined,
-        year: appliedFilters!.year ? Number(appliedFilters!.year) : undefined,
-        month: appliedFilters!.month ? Number(appliedFilters!.month) : undefined,
-        page: recordsPage,
-        limit: recordsLimit,
-      }),
+    queryFn: ({ signal }) =>
+      googleSheetsApi.getNcdRecords(
+        {
+          targetGroup: appliedFilters.targetGroup,
+          district: appliedFilters.district || undefined,
+          subdistrict: appliedFilters.subdistrict || undefined,
+          village: appliedFilters.village || undefined,
+          moo: appliedFilters.moo || undefined,
+          year: appliedFilters.year ? Number(appliedFilters.year) : undefined,
+          month: appliedFilters.month ? Number(appliedFilters.month) : undefined,
+          page: recordsPage,
+          limit: recordsLimit,
+        },
+        { signal }
+      ),
     staleTime: DETAIL_STALE_TIME,
     gcTime: DETAIL_GC_TIME,
   });
 
   useEffect(() => {
-    if (appliedFilters) {
-      setRecordsPage(1);
-    }
+    setRecordsPage(1);
   }, [appliedFilters]);
 
   const queryState = getCombinedQueryState([detailQuery, recordsQuery]);
-  const showInitialLoading = appliedFilters ? queryState.isInitialLoading : false;
-  const showRefreshing = appliedFilters ? queryState.isRefreshing : false;
+  const showInitialLoading = queryState.isInitialLoading;
+  const showRefreshing = queryState.isRefreshing;
   const isSearching = queryState.isInitialLoading || queryState.isRefreshing;
-  const isSearchDisabled = availabilityQuery.isPending || !availability || isSearching;
+  const isAvailabilityReady = Boolean(availability) || detailQuery.isError;
+  const isSearchDisabled = !isAvailabilityReady || isSearching;
   const activeFilters = appliedFilters;
-  const selectedMooLabel = appliedFilters?.moo ? `หมู่ที่ ${appliedFilters.moo}` : "";
+  const selectedMooLabel = appliedFilters.moo ? `หมู่ที่ ${appliedFilters.moo}` : "";
 
   useEffect(() => {
     if (!availability) {
@@ -518,18 +585,7 @@ const Detail = () => {
     });
   }, [mooOptions]);
 
-  const summary = data?.summary;
   const recordsPagination = recordsQuery.data;
-  const toValidNumber = (value: unknown): number => {
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return value;
-    }
-    if (typeof value === "string") {
-      const parsed = Number(value);
-      return Number.isFinite(parsed) ? parsed : 0;
-    }
-    return 0;
-  };
   const getPeriodLabel = (
     yearValue: unknown,
     monthValue: unknown
@@ -594,26 +650,6 @@ const Detail = () => {
     };
   }, [data?.categories]);
 
-  const overviewTotals = useMemo(() => {
-    const fallback = {
-      total: toValidNumber(summary?.total),
-      normal: toValidNumber(summary?.normal),
-      risk: toValidNumber(summary?.risk),
-      sick: toValidNumber(summary?.sick),
-    };
-
-    if (categorySummary.overview) {
-      return categorySummary.overview;
-    }
-
-    return fallback;
-  }, [
-    categorySummary.overview,
-    summary?.normal,
-    summary?.risk,
-    summary?.sick,
-    summary?.total,
-  ]);
   type DetailRowWithMetrics = DashboardDetailRow & {
     metrics?: {
       Overview?: {
@@ -637,6 +673,12 @@ const Detail = () => {
         sick?: number;
       };
     };
+    baselineMetrics?: NcdMetrics;
+    adjustedMetrics?: NcdMetrics;
+    adjustments?: NcdMetrics;
+    baselineOverviewTotal?: number;
+    adjustedOverviewTotal?: number;
+    adjustmentEntries?: NcdAdjustmentEntry[];
   };
 
   const rawDetailRecords = useMemo(() => {
@@ -695,9 +737,84 @@ const Detail = () => {
     const metrics = typedRow.metrics ?? {};
     const overviewMetrics =
       metrics.Overview ?? metrics.overview ?? metrics.Total ?? metrics.total;
-    const normal = toValidNumber(typedRow.normal ?? overviewMetrics?.normal);
-    const risk = toValidNumber(typedRow.risk ?? overviewMetrics?.risk);
-    const sick = toValidNumber(typedRow.sick ?? overviewMetrics?.sick);
+
+    const baselineMetrics = typedRow.baselineMetrics ?? (metrics as NcdMetrics | undefined);
+    const adjustedMetrics = typedRow.adjustedMetrics ?? (metrics as NcdMetrics | undefined);
+    const adjustmentsMetrics = typedRow.adjustments ?? undefined;
+
+    const baselineOverviewMetrics =
+      baselineMetrics?.Overview ??
+      baselineMetrics?.overview ??
+      overviewMetrics;
+    const adjustedOverviewMetrics =
+      adjustedMetrics?.Overview ??
+      adjustedMetrics?.overview ??
+      overviewMetrics;
+    const adjustmentsOverviewMetrics =
+      adjustmentsMetrics?.Overview ??
+      adjustmentsMetrics?.overview ??
+      adjustmentsMetrics?.Total ??
+      adjustmentsMetrics?.total;
+
+    const fallbackNormal = toValidNumber(typedRow.normal ?? overviewMetrics?.normal);
+    const fallbackRisk = toValidNumber(typedRow.risk ?? overviewMetrics?.risk);
+    const fallbackSick = toValidNumber(typedRow.sick ?? overviewMetrics?.sick);
+
+    const baselineNormalRaw = toValidNumber(
+      baselineOverviewMetrics?.normal ?? fallbackNormal
+    );
+    const baselineRiskRaw = toValidNumber(
+      baselineOverviewMetrics?.risk ?? fallbackRisk
+    );
+    const baselineSickRaw = toValidNumber(
+      baselineOverviewMetrics?.sick ?? fallbackSick
+    );
+
+    const adjustedNormalRaw = toValidNumber(
+      adjustedOverviewMetrics?.normal ?? fallbackNormal
+    );
+    const adjustedRiskRaw = toValidNumber(
+      adjustedOverviewMetrics?.risk ?? fallbackRisk
+    );
+    const adjustedSickRaw = toValidNumber(
+      adjustedOverviewMetrics?.sick ?? fallbackSick
+    );
+
+    const diffNormalRaw =
+      adjustmentsOverviewMetrics && adjustmentsOverviewMetrics.normal !== undefined
+        ? toValidNumber(adjustmentsOverviewMetrics.normal)
+        : adjustedNormalRaw - baselineNormalRaw;
+    const diffRiskRaw =
+      adjustmentsOverviewMetrics && adjustmentsOverviewMetrics.risk !== undefined
+        ? toValidNumber(adjustmentsOverviewMetrics.risk)
+        : adjustedRiskRaw - baselineRiskRaw;
+    const diffSickRaw =
+      adjustmentsOverviewMetrics && adjustmentsOverviewMetrics.sick !== undefined
+        ? toValidNumber(adjustmentsOverviewMetrics.sick)
+        : adjustedSickRaw - baselineSickRaw;
+
+    const baselineNormal = clampNonNegative(baselineNormalRaw);
+    const baselineRisk = clampNonNegative(baselineRiskRaw);
+    const baselineSick = clampNonNegative(baselineSickRaw);
+
+    const adjustedNormal = clampNonNegative(baselineNormal + diffNormalRaw);
+    const adjustedRisk = clampNonNegative(baselineRisk + diffRiskRaw);
+    const adjustedSick = clampNonNegative(baselineSick + diffSickRaw);
+
+    const diffNormal = adjustedNormal - baselineNormal;
+    const diffRisk = adjustedRisk - baselineRisk;
+    const diffSick = adjustedSick - baselineSick;
+
+    const baselineTotal =
+      typeof typedRow.baselineOverviewTotal === "number"
+        ? clampNonNegative(toValidNumber(typedRow.baselineOverviewTotal))
+        : clampNonNegative(baselineNormal + baselineRisk + baselineSick);
+    const adjustedTotal =
+      typeof typedRow.adjustedOverviewTotal === "number"
+        ? clampNonNegative(toValidNumber(typedRow.adjustedOverviewTotal))
+        : clampNonNegative(adjustedNormal + adjustedRisk + adjustedSick);
+    const diffTotal = adjustedTotal - baselineTotal;
+
     const referCount = toValidNumber(typedRow.referCount);
     const period =
       (typeof typedRow.period === "string" && typedRow.period
@@ -708,18 +825,95 @@ const Detail = () => {
         : getPeriodLabel(typedRow.year, typedRow.month)) ?? undefined;
     const hasExplicitTotal =
       typedRow.total !== undefined && typedRow.total !== null && typedRow.total !== "";
-    const total = hasExplicitTotal ? toValidNumber(typedRow.total) : normal + risk + sick;
+    const total = hasExplicitTotal
+      ? clampNonNegative(toValidNumber(typedRow.total))
+      : adjustedTotal;
+
+    const adjustmentEntries = Array.isArray(typedRow.adjustmentEntries)
+      ? typedRow.adjustmentEntries
+      : [];
 
     return {
       ...typedRow,
-      normal,
-      risk,
-      sick,
+      normal: adjustedNormal,
+      risk: adjustedRisk,
+      sick: adjustedSick,
       total,
       referCount,
       period,
+      baselineOverview: {
+        normal: baselineNormal,
+        risk: baselineRisk,
+        sick: baselineSick,
+        total: baselineTotal,
+      },
+      adjustedOverview: {
+        normal: adjustedNormal,
+        risk: adjustedRisk,
+        sick: adjustedSick,
+        total: adjustedTotal,
+      },
+      diffOverview: {
+        normal: diffNormal,
+        risk: diffRisk,
+        sick: diffSick,
+        total: diffTotal,
+      },
+      adjustmentEntries,
     };
   });
+
+  const detailAdjustmentSummary = useMemo(() => {
+    if (!detailRows.length) {
+      return null;
+    }
+
+    return detailRows.reduce(
+      (acc, row) => {
+        const baseline = row.baselineOverview;
+        const adjusted = row.adjustedOverview;
+        const diff = row.diffOverview;
+
+        acc.baseline.normal += baseline.normal;
+        acc.baseline.risk += baseline.risk;
+        acc.baseline.sick += baseline.sick;
+        acc.baseline.total += baseline.total;
+
+        acc.adjusted.normal += adjusted.normal;
+        acc.adjusted.risk += adjusted.risk;
+        acc.adjusted.sick += adjusted.sick;
+        acc.adjusted.total += adjusted.total;
+
+        acc.diff.normal += diff.normal;
+        acc.diff.risk += diff.risk;
+        acc.diff.sick += diff.sick;
+        acc.diff.total += diff.total;
+
+        return acc;
+      },
+      {
+        baseline: { normal: 0, risk: 0, sick: 0, total: 0 },
+        adjusted: { normal: 0, risk: 0, sick: 0, total: 0 },
+        diff: { normal: 0, risk: 0, sick: 0, total: 0 },
+      }
+    );
+  }, [detailRows]);
+
+  const adjustedTotals = detailAdjustmentSummary?.adjusted ?? fallbackAdjustedTotals;
+  const baselineTotals = detailAdjustmentSummary?.baseline ?? fallbackBaselineTotals;
+  const diffTotals = detailAdjustmentSummary?.diff ?? fallbackDiffTotals;
+
+  const overviewTotals = useMemo(() => {
+    if (detailAdjustmentSummary) {
+      return detailAdjustmentSummary.adjusted;
+    }
+
+    if (categorySummary.overview) {
+      return categorySummary.overview;
+    }
+
+    return fallbackAdjustedTotals;
+  }, [categorySummary.overview, detailAdjustmentSummary, fallbackAdjustedTotals]);
 
   const groupedData = useMemo(() => {
     const periods: Record<string, Record<string, Record<string, typeof detailRows>>> = {};
@@ -743,7 +937,70 @@ const Detail = () => {
 
     return periods;
   }, [detailRows]);
-  const totalPeople = summary?.total ?? 0;
+  const filteredGroupedData = useMemo(() => {
+    const term = locationSearchTerm.trim().toLowerCase();
+    if (!term) {
+      return groupedData;
+    }
+
+    const normalizeText = (value: unknown) => {
+      if (typeof value === "string") {
+        return value.toLowerCase();
+      }
+      if (typeof value === "number") {
+        return value.toString().toLowerCase();
+      }
+      return "";
+    };
+
+    const result: Record<string, Record<string, Record<string, typeof detailRows>>> = {};
+
+    Object.entries(groupedData).forEach(([periodKey, districts]) => {
+      const periodMatch = normalizeText(periodKey).includes(term);
+      const nextDistricts: Record<string, Record<string, typeof detailRows>> = {};
+
+      Object.entries(districts).forEach(([districtKey, subdistricts]) => {
+        const districtMatch = periodMatch || normalizeText(districtKey).includes(term);
+        const nextSubdistricts: Record<string, typeof detailRows> = {};
+
+        Object.entries(subdistricts).forEach(([subdistrictKey, villages]) => {
+          const subdistrictMatch =
+            districtMatch || normalizeText(subdistrictKey).includes(term);
+
+          const filteredVillages = subdistrictMatch
+            ? villages
+            : villages.filter((village) => {
+                const fields = [
+                  normalizeText(village.village),
+                  normalizeText(village.moo),
+                  normalizeText(village.subdistrict),
+                  normalizeText(village.district),
+                  normalizeText(village.period),
+                ];
+                return fields.some((field) => field.includes(term));
+              });
+
+          if (filteredVillages.length) {
+            nextSubdistricts[subdistrictKey] = filteredVillages;
+          }
+        });
+
+        if (Object.keys(nextSubdistricts).length) {
+          nextDistricts[districtKey] = nextSubdistricts;
+        }
+      });
+
+      if (Object.keys(nextDistricts).length) {
+        result[periodKey] = nextDistricts;
+      }
+    });
+
+    return result;
+  }, [groupedData, locationSearchTerm]);
+  const hasAnyData = Object.keys(groupedData).length > 0;
+  const hasFilteredResults = Object.keys(filteredGroupedData).length > 0;
+  const isFilteringLocations = locationSearchTerm.trim().length > 0;
+  const totalPeople = adjustedTotals.total;
   const totalRefer = useMemo(
     () => detailRows.reduce((acc, row) => acc + (row.referCount ?? 0), 0),
     [detailRows],
@@ -907,7 +1164,7 @@ const Detail = () => {
     if (riskPercentChange >= 20) {
       insights.push({
         title: "ความเสี่ยงเพิ่มสูง",
-        description: `จำนวนผู้มีความเสี่ยงเพิ่มขึ้น ${riskPercentChange.toFixed(1)}% เมื่อเทียบกับช่วงก่อนหน้า`,
+        description: `เพิ่มขึ้น ${riskPercentChange.toFixed(1)}% เทียบเดือนก่อน`,
         variant: "warning",
       });
     }
@@ -915,7 +1172,7 @@ const Detail = () => {
     if (!insights.length && riskPercentChange <= -10 && sickPercentChange <= -10) {
       insights.push({
         title: "แนวโน้มดีขึ้น",
-        description: `จำนวนกลุ่มเสี่ยงและผู้ป่วยลดลงอย่างเห็นได้ชัดจากช่วงก่อน (${Math.abs(riskPercentChange).toFixed(1)}% และ ${Math.abs(sickPercentChange).toFixed(1)}%)`,
+        description: `เสี่ยง -${Math.abs(riskPercentChange).toFixed(1)}% · ป่วย -${Math.abs(sickPercentChange).toFixed(1)}%`,
         variant: "success",
       });
     }
@@ -943,79 +1200,114 @@ const Detail = () => {
     return data?.metadata?.period ?? "ทั้งหมด";
   }, [appliedFilters, data?.metadata?.period]);
 
-  const formatLocation = (
-    entry?: { village?: string; subdistrict?: string; district?: string; moo?: string },
-  ) => {
-    if (!entry) {
-      return "ไม่พบข้อมูล";
+  const formatLocation = useCallback(
+    (entry?: { village?: string; subdistrict?: string; district?: string; moo?: string }) => {
+      if (!entry) {
+        return "ไม่พบข้อมูล";
+      }
+      const parts: string[] = [];
+      if (entry.village) {
+        parts.push(entry.village);
+      }
+      if (selectedMooLabel) {
+        parts.push(selectedMooLabel);
+      } else if (entry.moo) {
+        parts.push(`หมู่ที่ ${entry.moo}`);
+      }
+      if (entry.subdistrict) {
+        parts.push(entry.subdistrict);
+      }
+      if (entry.district) {
+        parts.push(entry.district);
+      }
+      return parts.length ? parts.join(" • ") : "ไม่พบข้อมูล";
+    },
+    [selectedMooLabel]
+  );
+
+  type SummaryMetricKey = "total" | "normal" | "risk" | "sick";
+
+  const formatMetricWithUnit = (value: number, unit: string = "คน") => {
+    return `${toValidNumber(value).toLocaleString()} ${unit}`;
+  };
+
+  const formatMetricDelta = (value: number, unit: string = "คน") => {
+    if (!Number.isFinite(value)) {
+      return "-";
     }
-    const parts: string[] = [];
-    if (entry.village) {
-      parts.push(entry.village);
+    if (value === 0) {
+      return "±0";
     }
-    if (selectedMooLabel) {
-      parts.push(selectedMooLabel);
-    } else if (entry.moo) {
-      parts.push(`หมู่ที่ ${entry.moo}`);
+    const sign = value > 0 ? "+" : "";
+    return `${sign}${Math.trunc(value).toLocaleString()} ${unit}`;
+  };
+
+  const metricTone = (key: SummaryMetricKey, value: number) => {
+    if (!Number.isFinite(value) || value === 0) {
+      return "muted" as const;
     }
-    if (entry.subdistrict) {
-      parts.push(entry.subdistrict);
+    if (key === "normal" || key === "total") {
+      return value >= 0 ? ("success" as const) : ("destructive" as const);
     }
-    if (entry.district) {
-      parts.push(entry.district);
+    return value >= 0 ? ("warning" as const) : ("success" as const);
+  };
+
+  const metricTrend = (value: number) => {
+    if (!Number.isFinite(value) || value === 0) {
+      return "neutral" as const;
     }
-    return parts.length ? parts.join(" • ") : "ไม่พบข้อมูล";
+    return value > 0 ? ("up" as const) : ("down" as const);
   };
 
   const detailStats = useMemo(() => {
-    if (!summary) {
+    const totals = adjustedTotals;
+    if (!totals.total) {
       return [];
     }
-    const total = summary.total || 0;
-    const percent = (value: number) => (total ? `${((value / total) * 100).toFixed(1)}%` : "0%");
-    return [
-      {
-        key: "total",
-        title: "รวมทั้งหมด",
-        value: summary.total.toLocaleString(),
-        percentage: "100%",
-        icon: Users,
-        variant: "default" as const,
-      },
-      {
-        key: "normal",
-        title: "ปกติ",
-        value: summary.normal.toLocaleString(),
-        percentage: percent(summary.normal),
-        icon: UserCheck,
-        variant: "success" as const,
-      },
-      {
-        key: "risk",
-        title: "กลุ่มเสี่ยง",
-        value: summary.risk.toLocaleString(),
-        percentage: percent(summary.risk),
-        icon: AlertTriangle,
-        variant: "warning" as const,
-      },
-      {
-        key: "sick",
-        title: "ป่วย",
-        value: summary.sick.toLocaleString(),
-        percentage: percent(summary.sick),
-        icon: ActivitySquare,
-        variant: "destructive" as const,
-      },
-      {
-        key: "refer",
-        title: "ส่งต่อหน่วยบริการ",
-        value: totalRefer.toLocaleString(),
-        percentage: referLocations.length ? `${referLocations.length.toLocaleString()} พื้นที่` : "ไม่มีข้อมูล",
-        icon: Stethoscope,
-        variant: "default" as const,
-      },
+    const baseline = baselineTotals;
+    const diff = diffTotals;
+    const percent = (value: number) =>
+      totals.total ? `${((value / totals.total) * 100).toFixed(1)}%` : "0%";
+
+    const buildStat = <T extends SummaryMetricKey>(
+      key: T,
+      title: string,
+      icon: typeof Users,
+      variant: "default" | "success" | "warning" | "destructive",
+    ) => {
+      const value = totals[key];
+      return {
+        key,
+        title,
+        value: value.toLocaleString(),
+        percentage: key === "total" ? "100%" : percent(value),
+        icon,
+        variant: variant as const,
+        baseline: baseline[key],
+        diff: diff[key],
+      };
+    };
+
+    const stats = [
+      buildStat("total", "รวมทั้งหมด", Users, "default"),
+      buildStat("normal", "ปกติ", UserCheck, "success"),
+      buildStat("risk", "กลุ่มเสี่ยง", AlertTriangle, "warning"),
+      buildStat("sick", "ป่วย", ActivitySquare, "destructive"),
     ];
-  }, [referLocations.length, summary, totalRefer]);
+
+    stats.push({
+      key: "refer",
+      title: "ส่งต่อหน่วยบริการ",
+      value: totalRefer.toLocaleString(),
+      percentage: referLocations.length
+        ? `${referLocations.length.toLocaleString()} พื้นที่`
+        : "ไม่มีข้อมูล",
+      icon: Stethoscope,
+      variant: "default" as const,
+    });
+
+    return stats;
+  }, [adjustedTotals, baselineTotals, diffTotals, referLocations.length, totalRefer]);
 
   const locationInsights = useMemo(() => {
     if (!appliedFilters || !summary) {
@@ -1024,34 +1316,37 @@ const Detail = () => {
     const insights: Array<{ title: string; description: string }> = [];
     insights.push({
       title: "ช่วงเวลาที่แสดงผล",
-      description: `ข้อมูลสะสมรวม ${totalPeople.toLocaleString()} คน ในช่วง ${selectedPeriodLabel}`,
+      description: `${selectedPeriodLabel} รวม ${totalPeople.toLocaleString()} คน`,
     });
 
     if (highestRiskEntry) {
       insights.push({
         title: "พื้นที่ที่มีจำนวนกลุ่มเสี่ยงสูง",
-        description: `${formatLocation(highestRiskEntry)} พบผู้มีความเสี่ยง ${highestRiskEntry.risk.toLocaleString()} คน`,
+        description: `${formatLocation(highestRiskEntry)} เสี่ยง ${highestRiskEntry.risk.toLocaleString()} คน`,
       });
     }
 
     if (highestRiskRatioEntry && highestRiskRatioEntry.total > 0) {
       insights.push({
         title: "อัตราความเสี่ยงสูงสุด",
-        description: `${formatLocation(highestRiskRatioEntry)} มีสัดส่วนกลุ่มเสี่ยง ${((highestRiskRatioEntry.risk / highestRiskRatioEntry.total) * 100).toFixed(1)}%`,
+        description: `${formatLocation(highestRiskRatioEntry)} คิดเป็น ${(
+          (highestRiskRatioEntry.risk / highestRiskRatioEntry.total) *
+          100
+        ).toFixed(1)}% ของพื้นที่นั้น`,
       });
     }
 
     if (highestSickEntry && highestSickEntry.sick > 0) {
       insights.push({
         title: "พื้นที่ที่พบผู้ป่วยมากที่สุด",
-        description: `${formatLocation(highestSickEntry)} มีผู้ป่วย ${highestSickEntry.sick.toLocaleString()} คน`,
+        description: `${formatLocation(highestSickEntry)} ป่วย ${highestSickEntry.sick.toLocaleString()} คน`,
       });
     }
 
     if (totalRefer > 0) {
       insights.push({
         title: "การส่งต่อผู้ป่วย",
-        description: `ส่งต่อรวม ${totalRefer.toLocaleString()} ครั้ง คิดเป็นเฉลี่ย ${averageRefer.toFixed(1)} ครั้งต่อพื้นที่ที่มีการส่งต่อ`,
+        description: `ส่งต่อ ${totalRefer.toLocaleString()} ครั้ง · เฉลี่ย ${averageRefer.toFixed(1)} ครั้ง/พื้นที่`,
       });
     }
 
@@ -1063,10 +1358,126 @@ const Detail = () => {
     highestRiskRatioEntry,
     highestSickEntry,
     selectedPeriodLabel,
+    formatLocation,
     summary,
     totalPeople,
     totalRefer,
   ]);
+
+  const quickHighlights = useMemo(() => {
+    const items: Array<{
+      id: string;
+      title: string;
+      detail: string;
+      tone: "muted" | "success" | "warning" | "destructive";
+    }> = [];
+
+    significantChanges.forEach((item, index) => {
+      items.push({
+        id: `change-${index}`,
+        title: item.title,
+        detail: item.description,
+        tone: item.variant,
+      });
+    });
+
+    locationInsights.forEach((insight, index) => {
+      items.push({
+        id: `insight-${index}`,
+        title: insight.title,
+        detail: insight.description,
+        tone: "muted",
+      });
+    });
+
+    return items.slice(0, 6);
+  }, [locationInsights, significantChanges]);
+  const renderFactorGrid = (mode: "absolute" | "percentage") => {
+    const isPercentage = mode === "percentage";
+    const formatValue = (value: number, base: number) => {
+      const numeric = toValidNumber(value);
+      if (!isPercentage) {
+        return numeric.toLocaleString();
+      }
+      if (!base) {
+        return numeric === 0 ? "0%" : "-";
+      }
+      return `${((numeric / base) * 100).toFixed(1)}%`;
+    };
+
+    return (
+      <div className="space-y-4">
+        <div className="rounded-lg border bg-muted/30 p-4">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <p className="text-sm text-muted-foreground">ภาพรวม</p>
+              <p className="text-2xl font-semibold text-primary">
+                {formatValue(overviewTotals.total, overviewTotals.total)}
+              </p>
+            </div>
+            <div className="grid grid-cols-3 gap-4 text-xs md:text-sm">
+              <div>
+                <p className="text-muted-foreground">ปกติ</p>
+                <p className="font-medium text-success">
+                  {formatValue(overviewTotals.normal, overviewTotals.total)}
+                </p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">เสี่ยง</p>
+                <p className="font-medium text-warning">
+                  {formatValue(overviewTotals.risk, overviewTotals.total)}
+                </p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">ป่วย</p>
+                <p className="font-medium text-destructive">
+                  {formatValue(overviewTotals.sick, overviewTotals.total)}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {categorySummary.factors.map((category) => {
+            const categoryTotal = toValidNumber(category.total);
+            return (
+              <div
+                key={category.key ?? category.name}
+                className="rounded-lg border bg-background p-4 space-y-3"
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="text-sm font-medium">{category.name}</p>
+                  <p className="text-lg font-semibold text-primary">
+                    {formatValue(categoryTotal, overviewTotals.total)}
+                  </p>
+                </div>
+                <div className="grid grid-cols-3 gap-3 text-xs md:text-sm">
+                  <div>
+                    <p className="text-muted-foreground">ปกติ</p>
+                    <p className="font-medium text-success">
+                      {formatValue(toValidNumber(category.normal), categoryTotal)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">เสี่ยง</p>
+                    <p className="font-medium text-warning">
+                      {formatValue(toValidNumber(category.risk), categoryTotal)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">ป่วย</p>
+                    <p className="font-medium text-destructive">
+                      {formatValue(toValidNumber(category.sick), categoryTotal)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   const hasMoreRecords = recordsPagination?.hasMore ?? false;
   const totalRecordPages =
@@ -1082,14 +1493,14 @@ const Detail = () => {
     recordsQuery.fetchStatus === "fetching" && recordsQuery.status !== "pending";
 
   const donutData = useMemo(() => {
-    if (!summary) {
+    if (!adjustedTotals.total) {
       return null;
     }
     return {
       labels: ["ปกติ", "เสี่ยง", "ป่วย"],
       datasets: [
         {
-          data: [summary.normal, summary.risk, summary.sick],
+          data: [adjustedTotals.normal, adjustedTotals.risk, adjustedTotals.sick],
           backgroundColor: [
             "hsl(var(--success))",
             "hsl(var(--warning))",
@@ -1099,7 +1510,7 @@ const Detail = () => {
         },
       ],
     };
-  }, [summary]);
+  }, [adjustedTotals]);
 
   const handleCurrentFilterChange = <T extends keyof DetailFilters>(
     key: T,
@@ -1395,56 +1806,88 @@ const Detail = () => {
                 <>
                   <section className="space-y-6">
                     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
-                      {detailStats.map((stat) => (
-                        <StatsCard
-                          key={stat.key}
-                          title={stat.title}
-                          value={stat.value}
-                          percentage={stat.percentage}
-                          icon={stat.icon}
-                          variant={stat.variant}
-                        />
-                      ))}
+                      {detailStats.map((stat) => {
+                        const details: Array<{
+                          label: string;
+                          value: string;
+                          tone?: "default" | "muted" | "success" | "warning" | "destructive";
+                        }> = [];
+
+                        if (
+                          typeof stat.baseline === "number" &&
+                          Number.isFinite(stat.baseline) &&
+                          stat.key !== "refer"
+                        ) {
+                          details.push({
+                            label: "ก่อนปรับ",
+                            value: formatMetricWithUnit(stat.baseline),
+                            tone: "muted",
+                          });
+                        }
+                        if (
+                          typeof stat.diff === "number" &&
+                          Number.isFinite(stat.diff) &&
+                          stat.key !== "refer"
+                        ) {
+                          details.push({
+                            label: "เปลี่ยนแปลง",
+                            value: formatMetricDelta(stat.diff),
+                            tone: metricTone(stat.key as SummaryMetricKey, stat.diff),
+                          });
+                        }
+
+                        return (
+                          <StatsCard
+                            key={stat.key}
+                            title={stat.title}
+                            value={stat.value}
+                            percentage={stat.percentage}
+                            icon={stat.icon}
+                            variant={stat.variant}
+                            details={details}
+                            delta={
+                              typeof stat.diff === "number" &&
+                              Number.isFinite(stat.diff) &&
+                              stat.key !== "refer"
+                                ? {
+                                    value: formatMetricDelta(stat.diff),
+                                    trend: metricTrend(stat.diff),
+                                    label: "เทียบก่อนปรับ",
+                                  }
+                                : undefined
+                            }
+                          />
+                        );
+                      })}
                     </div>
 
                     <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                       <Card>
-                        <CardHeader className="pb-2 space-y-1">
+                        <CardHeader className="pb-2">
                           <CardTitle className="flex items-center gap-2">
                             <TrendingUp className="h-5 w-5 text-primary" />
-                            บทสรุปสำคัญ
+                            ไฮไลต์ล่าสุด
                           </CardTitle>
-                          <CardDescription>สรุปผลจากข้อมูลที่กรองอยู่</CardDescription>
                         </CardHeader>
-                        <CardContent className="space-y-4">
-                          {significantChanges.length ? (
-                            <div className="space-y-2">
-                              {significantChanges.map((item) => (
-                                <div
-                                  key={item.title}
-                                  className={`rounded-md border p-3 ${
-                                    item.variant === "warning"
-                                      ? "border-warning/50 bg-warning/10 text-warning-foreground"
-                                      : item.variant === "destructive"
-                                      ? "border-destructive/50 bg-destructive/10 text-destructive-foreground"
-                                      : "border-success/50 bg-success/10 text-success-foreground"
-                                  }`}
-                                >
-                                  <p className="font-semibold">{item.title}</p>
-                                  <p className="text-sm">{item.description}</p>
-                                </div>
-                              ))}
-                            </div>
-                          ) : null}
-
-                          {locationInsights.length ? (
-                            <ul className="space-y-3 text-sm text-muted-foreground">
-                              {locationInsights.map((insight) => (
-                                <li key={insight.title}>
-                                  <p className="font-medium text-foreground">{insight.title}</p>
-                                  <p className="mt-1 leading-relaxed">{insight.description}</p>
-                                </li>
-                              ))}
+                        <CardContent className="space-y-3">
+                          {quickHighlights.length ? (
+                            <ul className="space-y-2">
+                              {quickHighlights.map((item) => {
+                                const toneClass =
+                                  item.tone === "success"
+                                    ? "text-success"
+                                    : item.tone === "warning"
+                                    ? "text-warning"
+                                    : item.tone === "destructive"
+                                    ? "text-destructive"
+                                    : "text-muted-foreground";
+                                return (
+                                  <li key={item.id} className="text-sm">
+                                    <p className={`font-semibold ${toneClass}`}>{item.title}</p>
+                                    <p className="text-xs text-muted-foreground">{item.detail}</p>
+                                  </li>
+                                );
+                              })}
                             </ul>
                           ) : (
                             <p className="text-sm text-muted-foreground">
@@ -1460,7 +1903,7 @@ const Detail = () => {
                             <Award className="h-5 w-5 text-warning" />
                             พื้นที่ที่ต้องเฝ้าระวัง
                           </CardTitle>
-                          <CardDescription>เรียงตามจำนวนผู้มีความเสี่ยง</CardDescription>
+                          <CardDescription>5 อันดับแรกตามจำนวนผู้เสี่ยง</CardDescription>
                         </CardHeader>
                         <CardContent>
                           {topRiskVillages.length ? (
@@ -1485,7 +1928,7 @@ const Detail = () => {
                                       {item.risk.toLocaleString()} คน
                                     </p>
                                     <p className="text-xs text-muted-foreground">
-                                      รวม {item.total.toLocaleString()} คน
+                                      ทั้งหมด {item.total.toLocaleString()} คน
                                     </p>
                                   </div>
                                 </div>
@@ -1505,6 +1948,7 @@ const Detail = () => {
                             <Stethoscope className="h-5 w-5 text-primary" />
                             การส่งต่อหน่วยบริการ
                           </CardTitle>
+                          <CardDescription>ภาพรวมการส่งต่อในตัวกรองนี้</CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-3 text-sm text-muted-foreground">
                           {totalRefer > 0 ? (
@@ -1527,9 +1971,6 @@ const Detail = () => {
                                   {averageRefer.toFixed(1)} ครั้ง
                                 </span>
                               </div>
-                              <p className="text-xs leading-relaxed">
-                                ใช้ข้อมูลนี้เพื่อประสานการติดตามผู้ป่วยและจัดสรรทรัพยากรให้เหมาะสม
-                              </p>
                             </>
                           ) : (
                             <p className="text-sm text-muted-foreground">
@@ -1549,6 +1990,7 @@ const Detail = () => {
                 <Card>
                   <CardHeader>
                     <CardTitle>สัดส่วนสถานะผู้รับการประเมิน</CardTitle>
+                    <CardDescription>แบ่งสัดส่วนตามสถานะล่าสุด</CardDescription>
                   </CardHeader>
                   <CardContent>
                     {summary && donutData ? (
@@ -1566,9 +2008,7 @@ const Detail = () => {
                 <Card>
                   <CardHeader>
                     <CardTitle>แนวโน้มข้อมูลตามช่วงเวลา</CardTitle>
-                    <CardDescription>
-                      แสดงการเปลี่ยนแปลงของสถานะคัดกรองในช่วงเวลาที่เลือก
-                    </CardDescription>
+                    <CardDescription>การเปลี่ยนแปลงรายเดือน</CardDescription>
                   </CardHeader>
                   <CardContent>
                     {Object.keys(groupedData).length > 1 ? (
@@ -1651,6 +2091,19 @@ const Detail = () => {
                         <p className="mt-1 text-base font-semibold text-primary">
                           {totalPeople.toLocaleString()} คน
                         </p>
+                        {Number.isFinite(diffTotals.total) ? (
+                          <p
+                            className={`text-xs font-semibold ${
+                              metricTone("total", diffTotals.total) === "success"
+                                ? "text-success"
+                                : metricTone("total", diffTotals.total) === "destructive"
+                                ? "text-destructive"
+                                : "text-muted-foreground"
+                            }`}
+                          >
+                            {formatMetricDelta(diffTotals.total)}
+                          </p>
+                        ) : null}
                         <p className="text-xs text-muted-foreground mt-1">
                           รวมกลุ่มเป้าหมายที่สำรวจในจังหวัดแพร่
                         </p>
@@ -1712,73 +2165,31 @@ const Detail = () => {
                 </CardHeader>
                 <CardContent>
                   {categorySummary.factors.length ? (
-                    <div className="space-y-4">
-                      <div className="rounded-lg border bg-muted/30 p-4">
-                        <div className="flex flex-wrap items-end justify-between gap-4">
-                          <div>
-                            <p className="text-sm text-muted-foreground">ภาพรวม</p>
-                            <p className="text-2xl font-semibold text-primary">
-                              {overviewTotals.total.toLocaleString()}
-                            </p>
-                          </div>
-                          <div className="grid grid-cols-3 gap-4 text-xs md:text-sm">
-                            <div>
-                              <p className="text-muted-foreground">ปกติ</p>
-                              <p className="font-medium text-success">
-                                {overviewTotals.normal.toLocaleString()}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-muted-foreground">เสี่ยง</p>
-                              <p className="font-medium text-warning">
-                                {overviewTotals.risk.toLocaleString()}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-muted-foreground">ป่วย</p>
-                              <p className="font-medium text-destructive">
-                                {overviewTotals.sick.toLocaleString()}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
+                    <Tabs
+                      value={factorView}
+                      onValueChange={(value) =>
+                        setFactorView((value as "absolute" | "percentage") || "absolute")
+                      }
+                      className="space-y-4"
+                    >
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <TabsList className="grid w-full grid-cols-2 sm:w-auto">
+                          <TabsTrigger value="absolute">จำนวนจริง</TabsTrigger>
+                          <TabsTrigger value="percentage">สัดส่วน (%)</TabsTrigger>
+                        </TabsList>
+                        <p className="text-xs text-muted-foreground sm:text-right">
+                          {factorView === "percentage"
+                            ? "สัดส่วนเทียบกับภาพรวมและภายในแต่ละปัจจัย"
+                            : "จำนวนผู้ที่อยู่ในแต่ละปัจจัยและสถานะ"}
+                        </p>
                       </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                        {categorySummary.factors.map((category) => (
-                          <div
-                            key={category.key ?? category.name}
-                            className="rounded-lg border bg-background p-4 space-y-3"
-                          >
-                            <div className="flex items-baseline justify-between gap-2">
-                              <p className="text-sm font-medium">{category.name}</p>
-                              <p className="text-lg font-semibold text-primary">
-                                {category.total.toLocaleString()}
-                              </p>
-                            </div>
-                            <div className="grid grid-cols-3 gap-3 text-xs md:text-sm">
-                              <div>
-                                <p className="text-muted-foreground">ปกติ</p>
-                                <p className="font-medium text-success">
-                                  {category.normal.toLocaleString()}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="text-muted-foreground">เสี่ยง</p>
-                                <p className="font-medium text-warning">
-                                  {category.risk.toLocaleString()}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="text-muted-foreground">ป่วย</p>
-                                <p className="font-medium text-destructive">
-                                  {category.sick.toLocaleString()}
-                                </p>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                      <TabsContent value="absolute" className="space-y-4">
+                        {renderFactorGrid("absolute")}
+                      </TabsContent>
+                      <TabsContent value="percentage" className="space-y-4">
+                        {renderFactorGrid("percentage")}
+                      </TabsContent>
+                    </Tabs>
                   ) : (
                     <p className="text-sm text-muted-foreground">
                       ยังไม่มีข้อมูลจำแนกตามปัจจัยเสี่ยงสำหรับเงื่อนไขที่เลือก
@@ -1787,24 +2198,56 @@ const Detail = () => {
                 </CardContent>
               </Card>
 
-              </section>
-
               <Card>
                 <CardHeader>
                   <CardTitle>รายละเอียดข้อมูลรายพื้นที่</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <Input
+                      value={locationSearchTerm}
+                      onChange={(event) => setLocationSearchTerm(event.target.value)}
+                      placeholder="ค้นหาในตาราง..."
+                      className="w-full sm:w-64"
+                      disabled={!hasAnyData}
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setShowReferMetrics((prev) => !prev)}
+                        disabled={!hasAnyData}
+                      >
+                        {showReferMetrics ? "ซ่อนคอลัมน์ส่งต่อ" : "แสดงคอลัมน์ส่งต่อ"}
+                      </Button>
+                      {locationSearchTerm ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setLocationSearchTerm("")}
+                        >
+                          ล้างการค้นหา
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
                   {showRefreshing ? (
                     <p className="text-sm text-muted-foreground">
                       กำลังอัปเดตข้อมูล...
                     </p>
-                  ) : Object.keys(groupedData).length === 0 ? (
+                  ) : !hasAnyData ? (
                     <p className="text-sm text-muted-foreground">
                       ไม่มีข้อมูลในช่วงเวลาที่เลือก
                     </p>
+                  ) : !hasFilteredResults && isFilteringLocations ? (
+                    <p className="text-sm text-muted-foreground">
+                      ไม่พบพื้นที่ที่ตรงกับคำค้น "{locationSearchTerm.trim()}"
+                    </p>
                   ) : (
                     <Accordion type="single" collapsible className="w-full">
-                      {Object.entries(groupedData).map(([periodKey, districts]) => (
+                      {Object.entries(filteredGroupedData).map(([periodKey, districts]) => (
                         <AccordionItem key={periodKey} value={periodKey}>
                           <AccordionTrigger className="hover:no-underline">
                             <div className="flex items-center justify-between w-full mr-4">
@@ -1877,12 +2320,14 @@ const Detail = () => {
                                                     {(village.total || village.normal + village.risk + village.sick).toLocaleString()}
                                                   </div>
                                                 </div>
-                                                <div className="text-center">
-                                                  <div className="text-xs text-muted-foreground">ส่งต่อ</div>
-                                                  <div className="font-medium">
-                                                    {(village.referCount ?? 0).toLocaleString()}
+                                                {showReferMetrics ? (
+                                                  <div className="text-center">
+                                                    <div className="text-xs text-muted-foreground">ส่งต่อ</div>
+                                                    <div className="font-medium">
+                                                      {(village.referCount ?? 0).toLocaleString()}
+                                                    </div>
                                                   </div>
-                                                </div>
+                                                ) : null}
                                               </div>
                                             </div>
                                           ))}
@@ -1900,6 +2345,7 @@ const Detail = () => {
                   )}
                 </CardContent>
               </Card>
+            </section>
           </>
         )}
       </main>

@@ -5,6 +5,8 @@ import {
   ActivitySquare,
   AlertTriangle,
   CalendarClock,
+  History,
+  RefreshCw,
   Sparkles,
   TrendingUp,
   UserCheck,
@@ -23,6 +25,8 @@ import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import {
   googleSheetsApi,
+  type DashboardAdjustmentCategorySummary,
+  type DashboardAdjustmentSummary,
   type DashboardData,
   type DashboardStatsCard,
 } from "@/services/googleSheetsApi";
@@ -42,10 +46,13 @@ const Overview = () => {
   const navigate = useNavigate();
   const dashboardQuery = useQuery({
     queryKey: ["dashboard", "overview", "general"],
-    queryFn: () =>
-      googleSheetsApi.getDashboardData({
-        targetGroup: "general",
-      }),
+    queryFn: ({ signal }) =>
+      googleSheetsApi.getDashboardData(
+        {
+          targetGroup: "general",
+        },
+        { signal }
+      ),
     staleTime: DASHBOARD_STALE_TIME,
     gcTime: DASHBOARD_GC_TIME,
   });
@@ -96,12 +103,168 @@ const Overview = () => {
     return data.stats;
   }, [data]);
 
-  const districts = data?.districts ?? [];
+  const districts = useMemo(
+    () => (Array.isArray(data?.districts) ? data.districts : []),
+    [data?.districts]
+  );
   const barChartData = data?.barChart;
   const lineChartData = data?.lineChart;
   const categories = data?.categories ?? [];
   const metadata = data?.metadata;
   const defaultTargetGroup = metadata?.targetGroup ?? "general";
+  const adjustments = data?.adjustments;
+  const adjustmentSummary: DashboardAdjustmentSummary | undefined =
+    adjustments?.summary;
+  const latestAdjustmentEntry =
+    adjustments?.latestEntry ?? adjustmentSummary?.latestEntry;
+
+  type SummaryMetricKey = "total" | "normal" | "risk" | "sick";
+
+  const adjustmentCategoryMap = useMemo(() => {
+    const categoryList = adjustments?.categories ?? [];
+    return new Map<string, DashboardAdjustmentCategorySummary>(
+      categoryList.map((item) => [item.key, item])
+    );
+  }, [adjustments?.categories]);
+
+  const formatNumber = (value: number | undefined | null) => {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value.toLocaleString();
+    }
+    return "-";
+  };
+
+  const formatDeltaValue = (value: number | undefined | null) => {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return "-";
+    }
+    if (value === 0) {
+      return "±0";
+    }
+    const sign = value > 0 ? "+" : "";
+    return `${sign}${Math.trunc(value).toLocaleString()}`;
+  };
+
+  const formatWithUnit = (
+    value: number | undefined | null,
+    unit: string = "คน"
+  ) => {
+    const formatted = formatNumber(value);
+    if (formatted === "-") {
+      return "-";
+    }
+    return `${formatted} ${unit}`;
+  };
+
+  const formatDeltaWithUnit = (
+    value: number | undefined | null,
+    unit: string = "คน"
+  ) => {
+    const formatted = formatDeltaValue(value);
+    if (formatted === "-") {
+      return "-";
+    }
+    return `${formatted} ${unit}`;
+  };
+
+  const toneClassName = (
+    tone: "default" | "muted" | "success" | "warning" | "destructive"
+  ) => {
+    switch (tone) {
+      case "success":
+        return "text-success";
+      case "warning":
+        return "text-warning";
+      case "destructive":
+        return "text-destructive";
+      case "muted":
+        return "text-muted-foreground";
+      default:
+        return "text-foreground";
+    }
+  };
+
+  const formatTimestamp = (value?: string | Date | null) => {
+    if (!value) {
+      return "ไม่พบข้อมูลเวลา";
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return "ไม่พบข้อมูลเวลา";
+    }
+    return new Intl.DateTimeFormat("th-TH", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(date);
+  };
+
+  const formatAdjustmentLocation = (entry: typeof latestAdjustmentEntry) => {
+    if (!entry) {
+      return "ไม่พบข้อมูลพื้นที่";
+    }
+    const parts = [
+      entry.district,
+      entry.subdistrict,
+      entry.village,
+      entry.moo ? `หมู่ที่ ${entry.moo}` : undefined,
+    ]
+      .filter((item): item is string => Boolean(item && item.trim()));
+
+    return parts.length > 0 ? parts.join(" · ") : "ไม่พบข้อมูลพื้นที่";
+  };
+
+  const getDeltaTrend = (key: SummaryMetricKey, value: number | undefined) => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value === 0) {
+      return "neutral" as const;
+    }
+    if (key === "normal") {
+      return value >= 0 ? ("up" as const) : ("down" as const);
+    }
+    if (key === "total") {
+      return value >= 0 ? ("up" as const) : ("down" as const);
+    }
+    return value >= 0 ? ("up" as const) : ("down" as const);
+  };
+
+  const getDetailTone = (key: SummaryMetricKey, value: number | undefined) => {
+    if (typeof value !== "number" || !Number.isFinite(value) || value === 0) {
+      return "muted" as const;
+    }
+    if (key === "normal") {
+      return value >= 0 ? ("success" as const) : ("destructive" as const);
+    }
+    if (key === "total") {
+      return value >= 0 ? ("success" as const) : ("destructive" as const);
+    }
+    return value >= 0 ? ("warning" as const) : ("success" as const);
+  };
+
+  const latestAdjustmentOverviewDiff = useMemo(() => {
+    if (!latestAdjustmentEntry?.diff) {
+      return null;
+    }
+    const overviewDiff =
+      latestAdjustmentEntry.diff.Overview ??
+      latestAdjustmentEntry.diff.overview ??
+      latestAdjustmentEntry.diff.Total ??
+      latestAdjustmentEntry.diff.total;
+    if (!overviewDiff) {
+      return null;
+    }
+    const normal = Number(overviewDiff.normal ?? 0);
+    const risk = Number(overviewDiff.risk ?? 0);
+    const sick = Number(overviewDiff.sick ?? 0);
+    const total = normal + risk + sick;
+    return {
+      normal,
+      risk,
+      sick,
+      total,
+    };
+  }, [latestAdjustmentEntry]);
 
   const handleDrillToDetail = (params: {
     targetGroup?: string;
@@ -136,11 +299,120 @@ const Overview = () => {
     navigate(queryString ? `/detail?${queryString}` : "/detail");
   };
   const summary = data?.summary;
+  const adjustedSummary = adjustmentSummary?.adjusted;
+  const baselineSummary = adjustmentSummary?.baseline;
+  const diffSummary = adjustmentSummary?.diff;
 
-  const total = summary?.total ?? 0;
-  const riskPercent = total ? (summary?.risk ?? 0) / total : 0;
-  const sickPercent = total ? (summary?.sick ?? 0) / total : 0;
-  const normalPercent = total ? (summary?.normal ?? 0) / total : 0;
+  const toSafeNumber = (value: unknown): number =>
+    typeof value === "number" && Number.isFinite(value) ? value : 0;
+  const clampNonNegative = (value: number): number =>
+    value < 0 ? 0 : value;
+
+  const baselineSummaryValues = useMemo(() => {
+    const values: Record<SummaryMetricKey, number> = {
+      normal: clampNonNegative(
+        toSafeNumber(baselineSummary?.normal ?? summary?.normal)
+      ),
+      risk: clampNonNegative(
+        toSafeNumber(baselineSummary?.risk ?? summary?.risk)
+      ),
+      sick: clampNonNegative(
+        toSafeNumber(baselineSummary?.sick ?? summary?.sick)
+      ),
+      total: clampNonNegative(
+        toSafeNumber(baselineSummary?.total ?? summary?.total)
+      ),
+    };
+    return values;
+  }, [baselineSummary?.normal, baselineSummary?.risk, baselineSummary?.sick, baselineSummary?.total, summary?.normal, summary?.risk, summary?.sick, summary?.total]);
+
+  const diffSummaryValues = useMemo(() => {
+    const values: Record<SummaryMetricKey, number> = {
+      normal: toSafeNumber(
+        diffSummary?.normal ??
+          (adjustedSummary?.normal ?? summary?.normal ?? 0) -
+            (baselineSummary?.normal ?? summary?.normal ?? 0)
+      ),
+      risk: toSafeNumber(
+        diffSummary?.risk ??
+          (adjustedSummary?.risk ?? summary?.risk ?? 0) -
+            (baselineSummary?.risk ?? summary?.risk ?? 0)
+      ),
+      sick: toSafeNumber(
+        diffSummary?.sick ??
+          (adjustedSummary?.sick ?? summary?.sick ?? 0) -
+            (baselineSummary?.sick ?? summary?.sick ?? 0)
+      ),
+      total: toSafeNumber(
+        diffSummary?.total ??
+          (adjustedSummary?.total ?? summary?.total ?? 0) -
+            (baselineSummary?.total ?? summary?.total ?? 0)
+      ),
+    };
+    return values;
+  }, [adjustedSummary?.normal, adjustedSummary?.risk, adjustedSummary?.sick, adjustedSummary?.total, baselineSummary?.normal, baselineSummary?.risk, baselineSummary?.sick, baselineSummary?.total, diffSummary?.normal, diffSummary?.risk, diffSummary?.sick, diffSummary?.total, summary?.normal, summary?.risk, summary?.sick, summary?.total]);
+
+  const adjustedSummaryValues = useMemo(() => {
+    const values: Record<SummaryMetricKey, number> = {
+      normal: clampNonNegative(
+        baselineSummaryValues.normal + diffSummaryValues.normal
+      ),
+      risk: clampNonNegative(
+        baselineSummaryValues.risk + diffSummaryValues.risk
+      ),
+      sick: clampNonNegative(
+        baselineSummaryValues.sick + diffSummaryValues.sick
+      ),
+      total: clampNonNegative(
+        baselineSummaryValues.total + diffSummaryValues.total
+      ),
+    };
+    return values;
+  }, [baselineSummaryValues, diffSummaryValues]);
+
+  const adjustmentSummaryRows = useMemo(() => {
+    if (!adjustmentSummary) {
+      return [];
+    }
+    const keys: Array<{ key: SummaryMetricKey; label: string }> = [
+      { key: "normal", label: "ปกติ" },
+      { key: "risk", label: "เสี่ยง" },
+      { key: "sick", label: "ป่วย" },
+      { key: "total", label: "รวม" },
+    ];
+    return keys.map((item) => {
+      const baseline = clampNonNegative(
+        toSafeNumber(
+          adjustmentSummary.baseline?.[
+            item.key as keyof DashboardAdjustmentSummary["baseline"]
+          ] ??
+            (item.key === "total"
+              ? baselineSummaryValues.total
+              : baselineSummaryValues[item.key])
+        )
+      );
+      const diff = toSafeNumber(
+        adjustmentSummary.diff?.[
+          item.key as keyof DashboardAdjustmentSummary["diff"]
+        ] ??
+          (item.key === "total"
+            ? diffSummaryValues.total
+            : diffSummaryValues[item.key])
+      );
+      const adjusted = clampNonNegative(baseline + diff);
+      return {
+        ...item,
+        baseline,
+        adjusted,
+        diff,
+      };
+    });
+  }, [adjustmentSummary, baselineSummaryValues, diffSummaryValues]);
+
+  const total = adjustedSummaryValues.total;
+  const riskPercent = total ? adjustedSummaryValues.risk / total : 0;
+  const sickPercent = total ? adjustedSummaryValues.sick / total : 0;
+  const normalPercent = total ? adjustedSummaryValues.normal / total : 0;
 
   const periodLabelMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -228,8 +500,8 @@ const Overview = () => {
                     <p className="text-3xl font-semibold text-success mt-2">
                       {(normalPercent * 100).toFixed(1)}%
                     </p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {summary?.normal?.toLocaleString() ?? 0} คน
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {adjustedSummaryValues.normal.toLocaleString()} คน
                     </p>
                   </div>
                   <div className="rounded-lg border bg-background/70 p-4 text-center">
@@ -239,8 +511,8 @@ const Overview = () => {
                     <p className="text-3xl font-semibold text-warning mt-2">
                       {(riskPercent * 100).toFixed(1)}%
                     </p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {summary?.risk?.toLocaleString() ?? 0} คน
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {adjustedSummaryValues.risk.toLocaleString()} คน
                     </p>
                   </div>
                   <div className="rounded-lg border bg-background/70 p-4 text-center">
@@ -250,8 +522,8 @@ const Overview = () => {
                     <p className="text-3xl font-semibold text-destructive mt-2">
                       {(sickPercent * 100).toFixed(1)}%
                     </p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {summary?.sick?.toLocaleString() ?? 0} คน
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {adjustedSummaryValues.sick.toLocaleString()} คน
                     </p>
                   </div>
                 </CardContent>
@@ -261,11 +533,53 @@ const Overview = () => {
                 {stats.map((stat) => {
                   const IconComponent =
                     iconMap[stat.key as keyof typeof iconMap] ?? Users;
-                  const formattedValue = stat.value.toLocaleString();
+                  const adjustedValue =
+                    stat.key === "total"
+                      ? adjustedSummaryValues.total
+                      : adjustedSummaryValues[stat.key as SummaryMetricKey] ??
+                        stat.value;
+                  const formattedValue = adjustedValue.toLocaleString();
                   const formattedPercentage =
                     stat.key === "total"
                       ? "100%"
                       : `${stat.percentage.toFixed(1)}%`;
+                  const metricKey: SummaryMetricKey =
+                    stat.key === "total"
+                      ? "total"
+                      : (stat.key as SummaryMetricKey);
+                  const baselineValue =
+                    metricKey === "total"
+                      ? baselineSummaryValues.total
+                      : baselineSummaryValues[metricKey];
+                  const diffValue =
+                    metricKey === "total"
+                      ? diffSummaryValues.total
+                      : diffSummaryValues[metricKey];
+                  const details: Array<{
+                    label: string;
+                    value: string;
+                    tone?: "default" | "muted" | "success" | "warning" | "destructive";
+                  }> = [];
+                  if (
+                    typeof baselineValue === "number" &&
+                    Number.isFinite(baselineValue)
+                  ) {
+                    details.push({
+                      label: "ก่อนปรับ",
+                      value: formatWithUnit(baselineValue),
+                      tone: "muted" as const,
+                    });
+                  }
+                  if (
+                    typeof diffValue === "number" &&
+                    Number.isFinite(diffValue)
+                  ) {
+                    details.push({
+                      label: "เปลี่ยนแปลง",
+                      value: formatDeltaWithUnit(diffValue),
+                      tone: getDetailTone(metricKey, diffValue),
+                    });
+                  }
 
                   return (
                     <StatsCard
@@ -275,10 +589,156 @@ const Overview = () => {
                       percentage={formattedPercentage}
                       icon={IconComponent}
                       variant={stat.variant}
+                      details={details}
+                      delta={
+                        typeof diffValue === "number" && Number.isFinite(diffValue)
+                          ? {
+                              value: formatDeltaWithUnit(diffValue),
+                              trend: getDeltaTrend(metricKey, diffValue),
+                              label: "เทียบก่อนปรับ",
+                            }
+                          : undefined
+                      }
                     />
                   );
                 })}
               </div>
+
+              {adjustmentSummary ? (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="flex flex-col gap-1">
+                      <span className="flex items-center gap-2">
+                        <RefreshCw className="h-4 w-4 text-primary" />
+                        ผลหลังการปรับยอด
+                      </span>
+                      <span className="text-sm font-normal text-muted-foreground">
+                        เทียบข้อมูลก่อนและหลังการบันทึกปรับยอดล่าสุด
+                      </span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    {adjustmentSummaryRows.map((row) => {
+                      const tone = getDetailTone(row.key, row.diff);
+                      return (
+                        <div
+                          key={row.key}
+                          className="rounded-lg border bg-background/70 p-3 space-y-2"
+                        >
+                          <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                            {row.label}
+                          </p>
+                          <div className="space-y-1 text-sm">
+                            <div className="flex items-center justify-between">
+                              <span className="text-muted-foreground">ก่อนปรับ</span>
+                              <span className="font-medium">
+                                {formatWithUnit(row.baseline)}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-muted-foreground">หลังปรับ</span>
+                              <span className="font-semibold text-primary">
+                                {formatWithUnit(row.adjusted)}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-muted-foreground">เปลี่ยนแปลง</span>
+                              <span className={`font-semibold ${toneClassName(tone)}`}>
+                                {formatDeltaWithUnit(row.diff)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </CardContent>
+                </Card>
+              ) : null}
+
+              {latestAdjustmentEntry ? (
+                <Card className="border-dashed border-primary/40">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex flex-col gap-1">
+                      <span className="flex items-center gap-2">
+                        <History className="h-4 w-4 text-primary" />
+                        การปรับยอดล่าสุด
+                      </span>
+                      <span className="text-sm font-normal text-muted-foreground">
+                        {formatTimestamp(latestAdjustmentEntry.createdAt)}
+                      </span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3 text-sm">
+                    <div className="flex flex-wrap gap-2">
+                      {latestAdjustmentEntry.createdBy ? (
+                        <Badge variant="secondary">
+                          ผู้บันทึก {latestAdjustmentEntry.createdBy}
+                        </Badge>
+                      ) : null}
+                      {latestAdjustmentEntry.targetGroup ? (
+                        <Badge variant="outline">
+                          กลุ่ม {latestAdjustmentEntry.targetGroup}
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground uppercase tracking-wide">
+                        เหตุผลการปรับ
+                      </p>
+                      <p className="text-base font-medium leading-relaxed">
+                        {latestAdjustmentEntry.reason?.trim() || "ไม่ระบุเหตุผล"}
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="rounded-lg border bg-muted/20 p-3">
+                        <p className="text-xs text-muted-foreground uppercase tracking-wide">
+                          พื้นที่ที่ได้รับการปรับ
+                        </p>
+                        <p className="mt-1 font-medium">
+                          {formatAdjustmentLocation(latestAdjustmentEntry)}
+                        </p>
+                      </div>
+                      <div className="rounded-lg border bg-muted/20 p-3">
+                        <p className="text-xs text-muted-foreground uppercase tracking-wide">
+                          ผลต่างเชิงยอดรวม
+                        </p>
+                        {latestAdjustmentOverviewDiff ? (
+                          <ul className="mt-1 space-y-1">
+                            <li className="flex items-center justify-between">
+                              <span className="text-muted-foreground">รวม</span>
+                              <span className={`font-semibold ${toneClassName(getDetailTone("total", latestAdjustmentOverviewDiff.total))}`}>
+                                {formatDeltaWithUnit(latestAdjustmentOverviewDiff.total)}
+                              </span>
+                            </li>
+                            <li className="flex items-center justify-between">
+                              <span className="text-muted-foreground">ปกติ</span>
+                              <span className={`font-semibold ${toneClassName(getDetailTone("normal", latestAdjustmentOverviewDiff.normal))}`}>
+                                {formatDeltaWithUnit(latestAdjustmentOverviewDiff.normal)}
+                              </span>
+                            </li>
+                            <li className="flex items-center justify-between">
+                              <span className="text-muted-foreground">เสี่ยง</span>
+                              <span className={`font-semibold ${toneClassName(getDetailTone("risk", latestAdjustmentOverviewDiff.risk))}`}>
+                                {formatDeltaWithUnit(latestAdjustmentOverviewDiff.risk)}
+                              </span>
+                            </li>
+                            <li className="flex items-center justify-between">
+                              <span className="text-muted-foreground">ป่วย</span>
+                              <span className={`font-semibold ${toneClassName(getDetailTone("sick", latestAdjustmentOverviewDiff.sick))}`}>
+                                {formatDeltaWithUnit(latestAdjustmentOverviewDiff.sick)}
+                              </span>
+                            </li>
+                          </ul>
+                        ) : (
+                          <p className="mt-1 text-muted-foreground">
+                            ไม่มีข้อมูลเปรียบเทียบเชิงยอดรวม
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : null}
 
               {showRefreshing && (
                 <p className="text-sm text-muted-foreground text-center">
@@ -361,8 +821,17 @@ const Overview = () => {
                         จำนวนทั้งหมด
                       </p>
                       <p className="mt-1 text-base font-semibold text-primary">
-                        {total.toLocaleString()} คน
+                        {adjustedSummaryValues.total.toLocaleString()} คน
                       </p>
+                      {Number.isFinite(diffSummaryValues.total) ? (
+                        <p
+                          className={`text-xs font-semibold ${toneClassName(
+                            getDetailTone("total", diffSummaryValues.total)
+                          )}`}
+                        >
+                          {formatDeltaWithUnit(diffSummaryValues.total)}
+                        </p>
+                      ) : null}
                       <p className="text-xs text-muted-foreground mt-1">
                         รวมกลุ่มเป้าหมายที่สำรวจในจังหวัดแพร่
                       </p>
@@ -414,16 +883,30 @@ const Overview = () => {
                 {categories
                   .filter((item) => item.key !== "Overview")
                   .map((item) => {
-                    const totalCategory = item.total || 0;
+                    const safeNormal = clampNonNegative(toSafeNumber(item.normal));
+                    const safeRisk = clampNonNegative(toSafeNumber(item.risk));
+                    const safeSick = clampNonNegative(toSafeNumber(item.sick));
+                    const totalCategory = clampNonNegative(
+                      toSafeNumber(item.total ?? safeNormal + safeRisk + safeSick)
+                    );
                     const normalShare = totalCategory
-                      ? (item.normal / totalCategory) * 100
+                      ? (safeNormal / totalCategory) * 100
                       : 0;
                     const riskShare = totalCategory
-                      ? (item.risk / totalCategory) * 100
+                      ? (safeRisk / totalCategory) * 100
                       : 0;
                     const sickShare = totalCategory
-                      ? (item.sick / totalCategory) * 100
+                      ? (safeSick / totalCategory) * 100
                       : 0;
+                    const adjustmentCategory = adjustmentCategoryMap.get(item.key);
+                    const baselineTotal = clampNonNegative(
+                      toSafeNumber(
+                        adjustmentCategory?.baseline.total ??
+                          totalCategory - toSafeNumber(adjustmentCategory?.diff.total ?? 0)
+                      )
+                    );
+                    const diffTotal = toSafeNumber(adjustmentCategory?.diff.total ?? 0);
+                    const adjustedTotal = clampNonNegative(baselineTotal + diffTotal);
 
                     return (
                       <Card
@@ -445,36 +928,65 @@ const Overview = () => {
 
                           <div className="space-y-3 text-xs">
                             <div className="rounded-md border bg-success/10 p-3">
-                              <div className="flex items-baseline justify-between text-success font-semibold">
-                                <span>ปกติ</span>
-                                <span>{normalShare.toFixed(1)}%</span>
-                              </div>
-                              <div className="mt-1 flex justify-between text-success/80 font-medium">
-                                <span>จำนวน</span>
-                                <span>{(item.normal ?? 0).toLocaleString()} คน</span>
-                              </div>
+                            <div className="flex items-baseline justify-between text-success font-semibold">
+                              <span>ปกติ</span>
+                              <span>{normalShare.toFixed(1)}%</span>
                             </div>
-                            <div className="rounded-md border bg-warning/10 p-3">
-                              <div className="flex items-baseline justify-between text-warning font-semibold">
-                                <span>เสี่ยง</span>
-                                <span>{riskShare.toFixed(1)}%</span>
-                              </div>
-                              <div className="mt-1 flex justify-between text-warning/80 font-medium">
-                                <span>จำนวน</span>
-                                <span>{(item.risk ?? 0).toLocaleString()} คน</span>
-                              </div>
-                            </div>
-                            <div className="rounded-md border bg-destructive/10 p-3">
-                              <div className="flex items-baseline justify-between text-destructive font-semibold">
-                                <span>ป่วย</span>
-                                <span>{sickShare.toFixed(1)}%</span>
-                              </div>
-                              <div className="mt-1 flex justify-between text-destructive/80 font-medium">
-                                <span>จำนวน</span>
-                                <span>{(item.sick ?? 0).toLocaleString()} คน</span>
-                              </div>
+                            <div className="mt-1 flex justify-between text-success/80 font-medium">
+                              <span>จำนวน</span>
+                              <span>{safeNormal.toLocaleString()} คน</span>
                             </div>
                           </div>
+                          <div className="rounded-md border bg-warning/10 p-3">
+                            <div className="flex items-baseline justify-between text-warning font-semibold">
+                              <span>เสี่ยง</span>
+                              <span>{riskShare.toFixed(1)}%</span>
+                            </div>
+                            <div className="mt-1 flex justify-between text-warning/80 font-medium">
+                              <span>จำนวน</span>
+                              <span>{safeRisk.toLocaleString()} คน</span>
+                            </div>
+                          </div>
+                          <div className="rounded-md border bg-destructive/10 p-3">
+                            <div className="flex items-baseline justify-between text-destructive font-semibold">
+                              <span>ป่วย</span>
+                              <span>{sickShare.toFixed(1)}%</span>
+                            </div>
+                            <div className="mt-1 flex justify-between text-destructive/80 font-medium">
+                              <span>จำนวน</span>
+                              <span>{safeSick.toLocaleString()} คน</span>
+                            </div>
+                          </div>
+                          </div>
+                          {adjustmentCategory ? (
+                            <div className="rounded-md border border-dashed bg-muted/10 p-3 space-y-1 text-xs">
+                              <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                                เปรียบเทียบหลังปรับ
+                              </p>
+                              <div className="flex items-center justify-between">
+                                <span className="text-muted-foreground">ก่อนปรับ</span>
+                                <span className="font-medium">
+                                  {formatWithUnit(baselineTotal, item.unit ?? "คน")}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-muted-foreground">เปลี่ยนแปลง</span>
+                                <span
+                                  className={`font-semibold ${toneClassName(
+                                    getDetailTone("total", diffTotal)
+                                  )}`}
+                                >
+                                  {formatDeltaWithUnit(diffTotal, item.unit ?? "คน")}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-muted-foreground">หลังปรับ</span>
+                                <span className="font-semibold text-primary">
+                                  {formatWithUnit(adjustedTotal, item.unit ?? "คน")}
+                                </span>
+                              </div>
+                            </div>
+                          ) : null}
                         </CardContent>
                       </Card>
                     );

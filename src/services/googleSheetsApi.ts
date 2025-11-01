@@ -2,6 +2,8 @@
 const API_URL =
   "https://script.google.com/macros/s/AKfycbz5vY2N5piXcY6ZVdaKBkS_aSqWdivUa-Xm_4H5JH7DTuj9QDQFkb1GlqojUzV2XtDstA/exec";
 
+const AUTH_INVALIDATED_EVENT = "auth:invalidated";
+
 export type UserRole = "admin" | "officer" | "viewer";
 export type UserStatus = "active" | "inactive" | "pending";
 
@@ -20,10 +22,20 @@ export interface ManagedUser extends User {
   lastLogin?: string;
 }
 
+export interface SessionInfo {
+  createdAt: string;
+  lastAccess: string;
+  sessionTimeout: number;
+  maxSessionDuration: number;
+  idleExpiresAt: string;
+  expiresAt: string;
+}
+
 export interface AuthResponse {
   success: boolean;
   user?: User;
   token?: string;
+  session?: SessionInfo | null;
   message?: string;
 }
 
@@ -82,6 +94,24 @@ export interface DashboardCategory {
   normal: number;
   risk: number;
   sick: number;
+  baseline?: {
+    total?: number;
+    normal?: number;
+    risk?: number;
+    sick?: number;
+  };
+  adjusted?: {
+    total?: number;
+    normal?: number;
+    risk?: number;
+    sick?: number;
+  };
+  diff?: {
+    total?: number;
+    normal?: number;
+    risk?: number;
+    sick?: number;
+  };
 }
 
 export interface DashboardDetailRow {
@@ -177,7 +207,46 @@ export interface DashboardData {
   comparison: {
     areas: DashboardComparisonArea[];
   };
+  adjustments?: DashboardAdjustmentsData;
   availability?: DashboardAvailability;
+}
+
+export interface DashboardAdjustmentMetrics {
+  normal: number;
+  risk: number;
+  sick: number;
+  total: number;
+}
+
+export interface DashboardAdjustmentSummary {
+  baseline: DashboardAdjustmentMetrics;
+  adjusted: DashboardAdjustmentMetrics;
+  diff: DashboardAdjustmentMetrics;
+  latestEntry?: NcdAdjustmentEntry;
+}
+
+export interface DashboardAdjustmentCategorySummary {
+  key: string;
+  name: string;
+  unit?: string;
+  baseline: DashboardAdjustmentMetrics;
+  adjusted: DashboardAdjustmentMetrics;
+  diff: DashboardAdjustmentMetrics;
+}
+
+export interface DashboardAdjustmentDistrictSummary {
+  id?: string;
+  name?: string;
+  baseline: DashboardAdjustmentMetrics;
+  adjusted: DashboardAdjustmentMetrics;
+  diff: DashboardAdjustmentMetrics;
+}
+
+export interface DashboardAdjustmentsData {
+  summary?: DashboardAdjustmentSummary;
+  categories?: DashboardAdjustmentCategorySummary[];
+  districts?: DashboardAdjustmentDistrictSummary[];
+  latestEntry?: NcdAdjustmentEntry;
 }
 
 export interface AlertRecord {
@@ -438,6 +507,7 @@ export interface DeleteDistrictEntryResult {
 interface FetchOptions {
   withAuth?: boolean;
   tokenOverride?: string | null;
+  signal?: AbortSignal;
 }
 
 class GoogleSheetsApiService {
@@ -445,6 +515,85 @@ class GoogleSheetsApiService {
 
   setAuthToken(token: string | null) {
     this.authToken = token ?? null;
+  }
+
+  private clearStoredAuthArtifacts() {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.localStorage.removeItem("token");
+      window.localStorage.removeItem("user");
+      window.localStorage.removeItem("session");
+    } catch (error) {
+      console.error("Failed to clear stored auth artifacts:", error);
+    }
+  }
+
+  private dispatchAuthInvalidatedEvent() {
+    if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") {
+      return;
+    }
+
+    try {
+      if (typeof CustomEvent === "function") {
+        window.dispatchEvent(new CustomEvent(AUTH_INVALIDATED_EVENT));
+        return;
+      }
+
+      if (typeof document !== "undefined" && typeof document.createEvent === "function") {
+        const fallbackEvent = document.createEvent("Event");
+        fallbackEvent.initEvent(AUTH_INVALIDATED_EVENT, false, false);
+        window.dispatchEvent(fallbackEvent);
+      }
+    } catch (error) {
+      console.error("Failed to dispatch auth invalidated event:", error);
+    }
+  }
+
+  private normalizeSessionInfo(
+    session: Partial<SessionInfo> | null | undefined
+  ): SessionInfo | null {
+    if (!session || typeof session !== "object") {
+      return null;
+    }
+
+    const toIsoString = (value: unknown): string | null => {
+      if (typeof value === "string" && value.trim().length > 0) {
+        return value;
+      }
+      if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+        try {
+          return new Date(value).toISOString();
+        } catch (error) {
+          console.error("Failed to convert session timestamp to ISO string:", error);
+        }
+      }
+      return null;
+    };
+
+    const createdAt = toIsoString(session.createdAt);
+    const lastAccess = toIsoString(session.lastAccess);
+    const idleExpiresAt = toIsoString(session.idleExpiresAt);
+    const expiresAt = toIsoString(session.expiresAt);
+
+    if (!createdAt || !lastAccess || !idleExpiresAt || !expiresAt) {
+      return null;
+    }
+
+    const sessionTimeout = Number(session.sessionTimeout);
+    const maxSessionDuration = Number(session.maxSessionDuration);
+
+    return {
+      createdAt,
+      lastAccess,
+      idleExpiresAt,
+      expiresAt,
+      sessionTimeout: Number.isFinite(sessionTimeout) && sessionTimeout > 0 ? sessionTimeout : 0,
+      maxSessionDuration:
+        Number.isFinite(maxSessionDuration) && maxSessionDuration > 0 ? maxSessionDuration : 0,
+    };
   }
 
   private resolveAuthToken(tokenOverride?: string | null): string | null {
@@ -472,7 +621,7 @@ class GoogleSheetsApiService {
     params: Record<string, unknown> = {},
     options: FetchOptions = {}
   ): Promise<TResponse> {
-    const { withAuth = true, tokenOverride = null } = options;
+    const { withAuth = true, tokenOverride = null, signal } = options;
     const formData = new URLSearchParams();
     formData.append("action", action);
 
@@ -499,6 +648,7 @@ class GoogleSheetsApiService {
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body: formData.toString(),
+      signal,
     });
 
     if (!response.ok) {
@@ -520,6 +670,7 @@ class GoogleSheetsApiService {
         success: boolean;
         token?: string;
         user?: User;
+        session?: Partial<SessionInfo> | null;
         message?: string;
       }>("login", { username, password }, { withAuth: false });
 
@@ -529,6 +680,7 @@ class GoogleSheetsApiService {
           success: true,
           user: result.user,
           token: result.token,
+          session: this.normalizeSessionInfo(result.session),
         };
       }
 
@@ -548,11 +700,42 @@ class GoogleSheetsApiService {
     }
   }
 
+  async getSessionStatus(): Promise<{ user: User; session: SessionInfo }> {
+    try {
+      const result = await this.fetchData<{
+        success: boolean;
+        user?: User;
+        session?: Partial<SessionInfo> | null;
+        message?: string;
+      }>("getSessionStatus");
+
+      if (!result.success || !result.user || !result.session) {
+        this.handleAuthorizationFailure(result.message);
+        throw new Error(result.message || "ไม่สามารถตรวจสอบสถานะเซสชันได้");
+      }
+
+      const session = this.normalizeSessionInfo(result.session);
+      if (!session) {
+        throw new Error("ไม่สามารถอ่านข้อมูลเซสชันได้");
+      }
+
+      return {
+        user: result.user,
+        session,
+      };
+    } catch (error) {
+      if (error instanceof Error) {
+        this.handleAuthorizationFailure(error.message);
+      }
+      console.error("getSessionStatus error:", error);
+      throw error;
+    }
+  }
+
   async logout(): Promise<boolean> {
     try {
       const token = this.resolveAuthToken();
       if (!token) {
-        this.setAuthToken(null);
         return true;
       }
 
@@ -561,13 +744,14 @@ class GoogleSheetsApiService {
         {},
         { withAuth: true }
       );
-
-      this.setAuthToken(null);
       return !!result.success;
     } catch (error) {
       console.error("Logout error:", error);
-      this.setAuthToken(null);
       return false;
+    } finally {
+      this.setAuthToken(null);
+      this.clearStoredAuthArtifacts();
+      this.dispatchAuthInvalidatedEvent();
     }
   }
 
@@ -586,12 +770,19 @@ class GoogleSheetsApiService {
   }
 
   private handleAuthorizationFailure(message?: string) {
-    if (message && message.toLowerCase().includes("unauthorized")) {
+    const normalized = (message || "").toLowerCase();
+    if (!normalized) {
+      return;
+    }
+
+    if (
+      normalized.includes("unauthorized") ||
+      normalized.includes("session") ||
+      (message && message.includes("เซสชัน"))
+    ) {
       this.setAuthToken(null);
-      if (typeof window !== "undefined") {
-        window.localStorage.removeItem("token");
-        window.localStorage.removeItem("user");
-      }
+      this.clearStoredAuthArtifacts();
+      this.dispatchAuthInvalidatedEvent();
     }
   }
 
@@ -670,13 +861,14 @@ class GoogleSheetsApiService {
   }
 
   async getDashboardData(
-    filters: Record<string, unknown> = {}
+    filters: Record<string, unknown> = {},
+    options: { signal?: AbortSignal } = {}
   ): Promise<DashboardData> {
     const result = await this.fetchData<{
       success: boolean;
       data?: DashboardData;
       message?: string;
-    }>("getDashboardData", filters, { withAuth: false });
+    }>("getDashboardData", filters, { withAuth: false, signal: options.signal });
 
     if (!result.success || !result.data) {
       this.handleAuthorizationFailure(result.message);
@@ -687,13 +879,14 @@ class GoogleSheetsApiService {
   }
 
   async getDashboardDetail(
-    params: DashboardDetailParams
+    params: DashboardDetailParams,
+    options: { signal?: AbortSignal } = {}
   ): Promise<DashboardDetailData> {
     const result = await this.fetchData<{
       success: boolean;
       data?: DashboardDetailData;
       message?: string;
-    }>("getDashboardDetail", params, { withAuth: false });
+    }>("getDashboardDetail", params, { withAuth: false, signal: options.signal });
 
     if (!result.success || !result.data) {
       this.handleAuthorizationFailure(result.message);
@@ -703,12 +896,15 @@ class GoogleSheetsApiService {
     return result.data;
   }
 
-  async getAlerts(params: GetAlertsParams = {}): Promise<AlertsListResponse> {
+  async getAlerts(
+    params: GetAlertsParams = {},
+    options: { signal?: AbortSignal } = {}
+  ): Promise<AlertsListResponse> {
     const result = await this.fetchData<{
       success: boolean;
       data?: AlertsListResponse;
       message?: string;
-    }>("getAlerts", params);
+    }>("getAlerts", params, { signal: options.signal });
 
     if (!result.success || !result.data) {
       this.handleAuthorizationFailure(result.message);
@@ -857,13 +1053,14 @@ class GoogleSheetsApiService {
   }
 
   async getNcdRecords(
-    params: GetNcdRecordsParams = {}
+    params: GetNcdRecordsParams = {},
+    options: { signal?: AbortSignal } = {}
   ): Promise<NcdRecordsResponse> {
     const result = await this.fetchData<{
       success: boolean;
       data?: NcdRecordsResponse;
       message?: string;
-    }>("getNcdRecords", params);
+    }>("getNcdRecords", params, { signal: options.signal });
 
     if (!result.success || !result.data) {
       this.handleAuthorizationFailure(result.message);
