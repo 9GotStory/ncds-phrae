@@ -38,6 +38,7 @@ import {
   CardHeader,
   CardTitle,
   CardDescription,
+  CardFooter,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -304,6 +305,7 @@ const statusOptions = [
 const ALL_ROLE_VALUE = "__all_role__";
 const ALL_STATUS_VALUE = "__all_status__";
 const NCD_PAGE_SIZE = 10;
+const LATEST_ADJUSTMENTS_PAGE_SIZE = 5;
 const USER_PAGE_SIZE = 50;
 const PASSWORD_POLICY_REGEX =
   /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
@@ -317,6 +319,39 @@ interface AdminPageProps {
   loadingMessage?: string;
   layoutVariant?: "admin" | "officer";
 }
+
+type LatestAdjustmentHistoryEntry = {
+  id: string;
+  createdAt: string | Date | null;
+  createdBy?: string | null;
+  reason?: string | null;
+  location: string;
+  periodLabel: string;
+  targetGroupLabel: string;
+  targetGroupKey?: string | null;
+  year?: number | null;
+  month?: number | null;
+  district?: string;
+  subdistrict?: string;
+  village?: string;
+  moo?: string;
+  diff: { normal: number; risk: number; sick: number; total: number };
+  baselineOverview?: { normal: number; risk: number; sick: number; total: number };
+  proposedOverview?: { normal: number; risk: number; sick: number; total: number };
+  metricsBaseline?: NcdMetrics | null;
+  metricsProposed?: NcdMetrics | null;
+  metricsDiff?: NcdMetrics | null;
+};
+
+type AdjustmentFilters = {
+  targetGroup: string;
+  year: number;
+  month: number;
+  district: string;
+  subdistrict: string;
+  village: string;
+  moo: string;
+};
 
 const Admin = ({
   allowUserManagement = true,
@@ -407,7 +442,8 @@ const Admin = ({
     () => Number(form.getValues("referCount") ?? 0) > 0
   );
 
-
+  const [adjustmentFilters, setAdjustmentFilters] =
+    useState<AdjustmentFilters | null>(null);
 
   const buildLocationParts = (
     district?: string,
@@ -463,8 +499,11 @@ const Admin = ({
       if (options?.unlock !== undefined) {
         setFormUnlocked(options.unlock);
       }
+      if (options?.unlock) {
+        setAdjustmentFilters(null);
+      }
     },
-    [form, setFormUnlocked, setHasReferral]
+    [form, setFormUnlocked, setHasReferral, setAdjustmentFilters]
   );
 
   const targetGroupValue = form.watch("targetGroup");
@@ -477,6 +516,25 @@ const Admin = ({
   const metricsValues = form.watch("metrics");
   const referCountValue = form.watch("referCount");
   const showMetricsForm = formUnlocked || Boolean(editingRecord);
+  const activeAdjustmentFilters = useMemo<AdjustmentFilters | null>(() => {
+    if (adjustmentFilters) {
+      return adjustmentFilters;
+    }
+    if (editingRecord) {
+      return {
+        targetGroup: editingRecord.targetGroup ?? "",
+        year: Number(editingRecord.year ?? 0),
+        month: Number(editingRecord.month ?? 0),
+        district: editingRecord.district ?? "",
+        subdistrict: editingRecord.subdistrict ?? "",
+        village: editingRecord.village ?? "",
+        moo: editingRecord.moo ?? "",
+      };
+    }
+    return null;
+  }, [adjustmentFilters, editingRecord]);
+  const shouldMatchPeriod =
+    Boolean(adjustmentFilters?.year) && Boolean(adjustmentFilters?.month);
 
   const allFiltersFilled =
     Number.isFinite(yearValue) &&
@@ -1476,6 +1534,18 @@ const Admin = ({
       return;
     }
 
+    const normalizedFilters: AdjustmentFilters = {
+      targetGroup: String(targetGroup ?? ""),
+      year: Number(year),
+      month: Number(month),
+      district: String(district ?? ""),
+      subdistrict: String(subdistrict ?? ""),
+      village: String(village ?? ""),
+      moo: String(moo ?? ""),
+    };
+    setAdjustmentFilters(normalizedFilters);
+    setAdjustmentHistoryPage(1);
+
     findNcdRecordMutation.mutate({
       targetGroup,
       year: Number(year),
@@ -1520,16 +1590,58 @@ const Admin = ({
     records.sort((a, b) => resolveTimestamp(b) - resolveTimestamp(a));
     return records;
   }, [rawNcdRecords]);
-  const latestAdjustmentEntries = useMemo(() => {
-    const entries: Array<{
-      id: string;
-      createdAt: string | Date | null;
-      createdBy?: string | null;
-      reason?: string | null;
-      diff: { normal: number; risk: number; sick: number; total: number };
-      location: string;
-    }> = [];
+  const latestAdjustmentEntries = useMemo<LatestAdjustmentHistoryEntry[]>(() => {
+    const entries: LatestAdjustmentHistoryEntry[] = [];
     const seen = new Set<string>();
+
+    const extractOverview = (metrics?: NcdMetrics | null) => {
+      if (!metrics) {
+        return undefined;
+      }
+      const overview =
+        metrics.Overview ??
+        metrics.overview ??
+        metrics.Total ??
+        metrics.total;
+      if (!overview) {
+        return undefined;
+      }
+      const normal = Number(overview.normal ?? 0);
+      const risk = Number(overview.risk ?? 0);
+      const sick = Number(overview.sick ?? 0);
+      return {
+        normal,
+        risk,
+        sick,
+        total: normal + risk + sick,
+      };
+    };
+
+    const resolvePeriodLabel = (
+      record: NcdRecord,
+      entry: NcdAdjustmentEntry
+    ): string => {
+      if (typeof entry.month === "number" && typeof entry.year === "number") {
+        const monthIndex = Math.max(1, Math.round(entry.month));
+        const monthLabel =
+          monthOptions[monthIndex - 1] ?? `เดือน ${String(entry.month).padStart(2, "0")}`;
+        return `${monthLabel} ${entry.year}`;
+      }
+
+      if (record.periodLabel) {
+        return record.periodLabel;
+      }
+
+      if (typeof record.month === "number" && typeof record.year === "number") {
+        const monthIndex = Math.max(1, Math.round(record.month));
+        const monthLabel =
+          monthOptions[monthIndex - 1] ??
+          `เดือน ${String(record.month).padStart(2, "0")}`;
+        return `${monthLabel} ${record.year}`;
+      }
+
+      return "ไม่พบข้อมูลช่วงเวลา";
+    };
 
     ncdRecords.forEach((record) => {
       const history = Array.isArray(record.adjustmentEntries)
@@ -1546,35 +1658,59 @@ const Admin = ({
         }
         seen.add(key);
 
-        const overview =
+        const overviewDiff =
           entry.diff?.Overview ??
           entry.diff?.overview ??
           entry.diff?.Total ??
           entry.diff?.total;
 
-        const normal = Number(overview?.normal ?? 0);
-        const risk = Number(overview?.risk ?? 0);
-        const sick = Number(overview?.sick ?? 0);
+        const normal = Number(overviewDiff?.normal ?? 0);
+        const risk = Number(overviewDiff?.risk ?? 0);
+        const sick = Number(overviewDiff?.sick ?? 0);
         const total = normal + risk + sick;
 
-        const locationParts: string[] = [];
-        const village = entry.village ?? record.village;
-        const moo = entry.moo ?? record.moo;
-        const subdistrict = entry.subdistrict ?? record.subdistrict;
-        const district = entry.district ?? record.district;
+        const entryYear = entry.year ?? record.year ?? null;
+        const entryMonth = entry.month ?? record.month ?? null;
+        const districtRaw =
+          entry.district ?? record.district ?? "";
+        const subdistrictRaw =
+          entry.subdistrict ?? record.subdistrict ?? "";
+        const villageRaw = entry.village ?? record.village ?? "";
+        const mooRaw = entry.moo ?? record.moo ?? "";
+        const districtValue =
+          districtRaw !== null && districtRaw !== undefined
+            ? String(districtRaw)
+            : "";
+        const subdistrictValue =
+          subdistrictRaw !== null && subdistrictRaw !== undefined
+            ? String(subdistrictRaw)
+            : "";
+        const villageValue =
+          villageRaw !== null && villageRaw !== undefined
+            ? String(villageRaw)
+            : "";
+        const mooValue =
+          mooRaw !== null && mooRaw !== undefined ? String(mooRaw) : "";
 
-        if (village) {
-          locationParts.push(village);
+        const locationParts: string[] = [];
+        if (villageValue) {
+          locationParts.push(villageValue);
         }
-        if (moo) {
-          locationParts.push(`หมู่ที่ ${moo}`);
+        if (mooValue) {
+          locationParts.push(`หมู่ที่ ${mooValue}`);
         }
-        if (subdistrict) {
-          locationParts.push(`ตำบล ${subdistrict}`);
+        if (subdistrictValue) {
+          locationParts.push(`ตำบล ${subdistrictValue}`);
         }
-        if (district) {
-          locationParts.push(`อำเภอ ${district}`);
+        if (districtValue) {
+          locationParts.push(`อำเภอ ${districtValue}`);
         }
+
+        const targetGroupKey = entry.targetGroup ?? record.targetGroup ?? null;
+        const targetGroupLabel =
+          targetGroupKey && targetGroupLabels[targetGroupKey]
+            ? targetGroupLabels[targetGroupKey]
+            : targetGroupKey ?? "-";
 
         entries.push({
           id: key,
@@ -1583,6 +1719,20 @@ const Admin = ({
           reason: entry.reason ?? "",
           diff: { normal, risk, sick, total },
           location: locationParts.length ? locationParts.join(" • ") : "ไม่พบข้อมูลพื้นที่",
+          periodLabel: resolvePeriodLabel(record, entry),
+          targetGroupLabel,
+          targetGroupKey,
+          year: entryYear,
+          month: entryMonth,
+          district: districtValue,
+          subdistrict: subdistrictValue,
+          village: villageValue,
+          moo: mooValue,
+          baselineOverview: extractOverview(entry.baseline),
+          proposedOverview: extractOverview(entry.proposed),
+          metricsBaseline: entry.baseline ?? null,
+          metricsProposed: entry.proposed ?? null,
+          metricsDiff: entry.diff ?? null,
         });
       });
     });
@@ -1601,10 +1751,120 @@ const Admin = ({
     entries.sort((a, b) => resolveTime(b.createdAt) - resolveTime(a.createdAt));
     return entries;
   }, [ncdRecords]);
-  const latestAdjustments = useMemo(
-    () => latestAdjustmentEntries.slice(0, 6),
-    [latestAdjustmentEntries]
+const {
+  entries: filteredAdjustmentEntries,
+  appliedPeriod: isAdjustmentPeriodApplied,
+} = useMemo(() => {
+  if (!activeAdjustmentFilters) {
+    return { entries: [] as LatestAdjustmentHistoryEntry[], appliedPeriod: false };
+  }
+
+  const matchesArea = latestAdjustmentEntries.filter((entry) => {
+    if (
+      normalizeForCompare(entry.targetGroupKey ?? "") !==
+      normalizeForCompare(activeAdjustmentFilters.targetGroup)
+    ) {
+      return false;
+    }
+
+    if (
+      activeAdjustmentFilters.district &&
+      normalizeForCompare(entry.district ?? "") !==
+        normalizeForCompare(activeAdjustmentFilters.district)
+    ) {
+      return false;
+    }
+    if (
+      activeAdjustmentFilters.subdistrict &&
+      normalizeForCompare(entry.subdistrict ?? "") !==
+        normalizeForCompare(activeAdjustmentFilters.subdistrict)
+    ) {
+      return false;
+    }
+    if (
+      activeAdjustmentFilters.village &&
+      normalizeForCompare(entry.village ?? "") !==
+        normalizeForCompare(activeAdjustmentFilters.village)
+    ) {
+      return false;
+    }
+    if (
+      activeAdjustmentFilters.moo &&
+      normalizeForCompare(entry.moo ?? "") !==
+        normalizeForCompare(activeAdjustmentFilters.moo)
+    ) {
+      return false;
+    }
+
+    return true;
+  });
+
+  if (shouldMatchPeriod) {
+    const periodMatches = matchesArea.filter(
+      (entry) =>
+        Number(entry.year ?? 0) === Number(activeAdjustmentFilters.year) &&
+        Number(entry.month ?? 0) === Number(activeAdjustmentFilters.month)
+    );
+    if (periodMatches.length > 0) {
+      return { entries: periodMatches, appliedPeriod: true };
+    }
+  }
+
+  return { entries: matchesArea, appliedPeriod: false };
+}, [
+  activeAdjustmentFilters,
+  latestAdjustmentEntries,
+  normalizeForCompare,
+  shouldMatchPeriod,
+]);
+  const [adjustmentHistoryPage, setAdjustmentHistoryPage] = useState(1);
+  const totalAdjustmentCount = filteredAdjustmentEntries.length;
+  const totalAdjustmentPages = totalAdjustmentCount
+    ? Math.max(1, Math.ceil(totalAdjustmentCount / LATEST_ADJUSTMENTS_PAGE_SIZE))
+    : 1;
+  const paginatedAdjustments = useMemo(
+    () => {
+      if (!totalAdjustmentCount) {
+        return [] as LatestAdjustmentHistoryEntry[];
+      }
+      const startIndex = (adjustmentHistoryPage - 1) * LATEST_ADJUSTMENTS_PAGE_SIZE;
+      return filteredAdjustmentEntries.slice(
+        startIndex,
+        startIndex + LATEST_ADJUSTMENTS_PAGE_SIZE
+      );
+    },
+    [adjustmentHistoryPage, filteredAdjustmentEntries, totalAdjustmentCount]
   );
+
+  useEffect(() => {
+    setAdjustmentHistoryPage(1);
+  }, [adjustmentFilters, editingRecord?.id]);
+
+  useEffect(() => {
+    if (!totalAdjustmentCount) {
+      if (adjustmentHistoryPage !== 1) {
+        setAdjustmentHistoryPage(1);
+      }
+      return;
+    }
+    const maxPage = Math.max(
+      1,
+      Math.ceil(totalAdjustmentCount / LATEST_ADJUSTMENTS_PAGE_SIZE)
+    );
+    if (adjustmentHistoryPage > maxPage) {
+      setAdjustmentHistoryPage(maxPage);
+    }
+  }, [adjustmentHistoryPage, totalAdjustmentCount]);
+
+  const [adjustmentDetailOpen, setAdjustmentDetailOpen] = useState(false);
+  const [selectedAdjustmentEntry, setSelectedAdjustmentEntry] =
+    useState<LatestAdjustmentHistoryEntry | null>(null);
+  useEffect(() => {
+    if (!adjustmentFilters) {
+      setAdjustmentHistoryPage(1);
+    }
+  }, [adjustmentFilters]);
+
   const ncdTotalCount = ncdPagination?.total ?? 0;
   const latestShowingCount = ncdRecords.length;
   const targetGroupDisplay =
@@ -1637,6 +1897,118 @@ const Admin = ({
       monthOptions[monthIndex - 1] ?? `เดือน ${String(month).padStart(2, "0")}`;
     return `${monthName} ${year}`;
   }, []);
+  const adjustmentFiltersPeriodLabel =
+    isAdjustmentPeriodApplied && activeAdjustmentFilters
+      ? formatPeriodLabel(
+          activeAdjustmentFilters.month,
+          activeAdjustmentFilters.year
+        )
+      : "";
+  const adjustmentFiltersLocationLabel = activeAdjustmentFilters
+    ? (() => {
+        const parts = buildLocationParts(
+          activeAdjustmentFilters.district,
+          activeAdjustmentFilters.subdistrict,
+          activeAdjustmentFilters.village,
+          activeAdjustmentFilters.moo
+        );
+        return parts.length ? parts.join(" · ") : "";
+      })()
+    : "";
+  const adjustmentTargetGroupLabel = activeAdjustmentFilters
+    ? targetGroupLabels[activeAdjustmentFilters.targetGroup] ??
+      activeAdjustmentFilters.targetGroup
+    : "";
+  const handleOpenAdjustmentDetail = useCallback(
+    (entry: LatestAdjustmentHistoryEntry) => {
+      setSelectedAdjustmentEntry(entry);
+      setAdjustmentDetailOpen(true);
+    },
+    []
+  );
+  const handleAdjustmentDetailChange = useCallback((open: boolean) => {
+    setAdjustmentDetailOpen(open);
+    if (!open) {
+      setSelectedAdjustmentEntry(null);
+    }
+  }, []);
+  const adjustmentDetailRows = useMemo(() => {
+    if (!selectedAdjustmentEntry) {
+      return [] as Array<{
+        key: MetricCategoryKey;
+        title: string;
+        baseline: { normal: number; risk: number; sick: number; total: number };
+        proposed: { normal: number; risk: number; sick: number; total: number };
+        diff: { normal: number; risk: number; sick: number; total: number };
+      }>;
+    }
+
+    const baselineMetrics = selectedAdjustmentEntry.metricsBaseline ?? null;
+    const proposedMetrics = selectedAdjustmentEntry.metricsProposed ?? null;
+    const diffMetrics = selectedAdjustmentEntry.metricsDiff ?? null;
+
+    return metricStepConfigs
+      .map((config) => {
+        const diffCategory = diffMetrics?.[config.key];
+        const diffNormal = Number(diffCategory?.normal ?? 0);
+        const diffRisk = Number(diffCategory?.risk ?? 0);
+        const diffSick = Number(diffCategory?.sick ?? 0);
+        if (diffNormal === 0 && diffRisk === 0 && diffSick === 0) {
+          return null;
+        }
+
+        const baselineCategory = baselineMetrics?.[config.key];
+        const baselineNormal = Number(baselineCategory?.normal ?? 0);
+        const baselineRisk = Number(baselineCategory?.risk ?? 0);
+        const baselineSick = Number(baselineCategory?.sick ?? 0);
+        const baselineTotal = baselineNormal + baselineRisk + baselineSick;
+
+        const proposedCategory = proposedMetrics?.[config.key];
+        const proposedNormal =
+          proposedCategory !== undefined
+            ? Number(proposedCategory?.normal ?? 0)
+            : baselineNormal + diffNormal;
+        const proposedRisk =
+          proposedCategory !== undefined
+            ? Number(proposedCategory?.risk ?? 0)
+            : baselineRisk + diffRisk;
+        const proposedSick =
+          proposedCategory !== undefined
+            ? Number(proposedCategory?.sick ?? 0)
+            : baselineSick + diffSick;
+        const proposedTotal = proposedNormal + proposedRisk + proposedSick;
+
+        return {
+          key: config.key,
+          title: config.title,
+          baseline: {
+            normal: baselineNormal,
+            risk: baselineRisk,
+            sick: baselineSick,
+            total: baselineTotal,
+          },
+          proposed: {
+            normal: proposedNormal,
+            risk: proposedRisk,
+            sick: proposedSick,
+            total: proposedTotal,
+          },
+          diff: {
+            normal: diffNormal,
+            risk: diffRisk,
+            sick: diffSick,
+            total: proposedTotal - baselineTotal,
+          },
+        };
+      })
+      .filter((row): row is {
+        key: MetricCategoryKey;
+        title: string;
+        baseline: { normal: number; risk: number; sick: number; total: number };
+        proposed: { normal: number; risk: number; sick: number; total: number };
+        diff: { normal: number; risk: number; sick: number; total: number };
+      } => Boolean(row));
+  }, [selectedAdjustmentEntry]);
   const usersData: UsersListResponse | undefined = usersPagination;
   const passwordDialogTargetName =
     passwordDialogAccount?.name?.trim().length
@@ -1752,60 +2124,6 @@ const Admin = ({
             </TabsList>
 
             <TabsContent value="data" className="space-y-6">
-              {latestAdjustments.length ? (
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="flex items-center gap-2">
-                      <Clock3 className="w-4 h-4 text-primary" />
-                      ประวัติการปรับยอดล่าสุด
-                    </CardTitle>
-                    <CardDescription>
-                      แสดง {latestAdjustments.length.toLocaleString()} รายการล่าสุดจาก{" "}
-                      {latestAdjustmentEntries.length.toLocaleString()} การปรับยอด
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    {latestAdjustments.map((entry) => {
-                      const toneClass =
-                        entry.diff.total > 0
-                          ? "text-success"
-                          : entry.diff.total < 0
-                          ? "text-destructive"
-                          : "text-muted-foreground";
-
-                      return (
-                        <div
-                          key={entry.id}
-                          className="space-y-2 rounded-md border bg-muted/20 p-3 text-sm"
-                        >
-                          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                            <span className="font-medium">
-                              {formatRecordTimestamp(entry.createdAt)}
-                            </span>
-                            <span className={`font-semibold ${toneClass}`}>
-                              {formatDelta(entry.diff.total)}
-                            </span>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                            <span>{entry.location}</span>
-                            {entry.createdBy ? <span>โดย {entry.createdBy}</span> : null}
-                          </div>
-                          <p className="text-xs text-muted-foreground">
-                            ปกติ {formatDelta(entry.diff.normal)} · เสี่ยง {formatDelta(entry.diff.risk)} · ป่วย{" "}
-                            {formatDelta(entry.diff.sick)}
-                          </p>
-                          {entry.reason ? (
-                            <p className="text-xs text-muted-foreground">
-                              เหตุผล: {entry.reason}
-                            </p>
-                          ) : null}
-                        </div>
-                      );
-                    })}
-                  </CardContent>
-                </Card>
-              ) : null}
-
               <Card
                 className={
                   editingRecord ? "border-amber-200 bg-amber-50/40" : undefined
@@ -2617,7 +2935,6 @@ const Admin = ({
                   </form>
                 </CardContent>
               </Card>
-
               <Card>
                 <CardHeader>
                   <CardTitle>ข้อมูลที่บันทึกล่าสุด</CardTitle>
@@ -2900,15 +3217,15 @@ const Admin = ({
                             </div>
                             <DialogContent
                               aria-describedby="ncd-record-detail-description"
-                              className="max-w-4xl"
+                              className="flex max-h-[calc(100vh-4rem)] max-w-[calc(100vw-4rem)] flex-col overflow-hidden p-0 sm:max-w-3xl"
                             >
-                              <DialogHeader>
+                              <DialogHeader className="border-b px-6 py-4">
                                 <DialogTitle>รายละเอียดข้อมูลบันทึก</DialogTitle>
                                 <DialogDescription id="ncd-record-detail-description">
                                   {`ข้อมูลกลุ่ม ${detailTargetGroupLabel} รอบ ${detailPeriodText}`}
                                 </DialogDescription>
                               </DialogHeader>
-                              <div className="space-y-6">
+                              <div className="flex-1 overflow-auto px-6 py-4 space-y-6">
                                 <div className="grid gap-4 sm:grid-cols-2">
                                   <div className="space-y-1">
                                     <p className="text-sm text-muted-foreground">
@@ -3095,7 +3412,7 @@ const Admin = ({
                                   </div>
                                 ) : null}
                               </div>
-                              <DialogFooter>
+                              <DialogFooter className="border-t px-6 py-4">
                                 <DialogClose asChild>
                                   <Button type="button" variant="outline">
                                     ปิด
@@ -3106,10 +3423,293 @@ const Admin = ({
                           </Dialog>
                         );
                       })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+              {activeAdjustmentFilters ? (
+                <>
+                    <Card>
+                  <CardHeader className="pb-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <CardTitle className="flex items-center gap-2">
+                        <Clock3 className="w-4 h-4 text-primary" />
+                        ประวัติการปรับยอดล่าสุด
+                      </CardTitle>
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                        {adjustmentFiltersPeriodLabel ? (
+                          <Badge variant="outline">{adjustmentFiltersPeriodLabel}</Badge>
+                      ) : null}
+                      <Badge variant="secondary">
+                        {adjustmentTargetGroupLabel || activeAdjustmentFilters?.targetGroup || "-"}
+                      </Badge>
+                      {adjustmentFiltersLocationLabel ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5">
+                          <MapPin className="h-3 w-3 text-primary" />
+                          <span className="leading-none">{adjustmentFiltersLocationLabel}</span>
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                  <CardDescription>
+                    {totalAdjustmentCount ? (
+                      isAdjustmentPeriodApplied ? (
+                        `พบ ${totalAdjustmentCount.toLocaleString()} รายการที่ตรงกับช่วงเวลาที่เลือก`
+                      ) : shouldMatchPeriod ? (
+                        `ไม่พบการปรับยอดในช่วงเวลานี้ · แสดงทั้งหมด ${totalAdjustmentCount.toLocaleString()} รายการของพื้นที่นี้`
+                      ) : (
+                        `แสดงทั้งหมด ${totalAdjustmentCount.toLocaleString()} รายการของพื้นที่นี้`
+                      )
+                    ) : (
+                      "ยังไม่มีการปรับยอดที่ตรงกับพื้นที่นี้"
+                    )}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {paginatedAdjustments.length ? (
+                    paginatedAdjustments.map((entry) => {
+                      const toneClass =
+                        entry.diff.total > 0
+                          ? "bg-success/10 text-success"
+                          : entry.diff.total < 0
+                          ? "bg-destructive/10 text-destructive"
+                          : "bg-muted text-muted-foreground";
+                      return (
+                        <div
+                          key={entry.id}
+                          className="space-y-3 rounded-xl border border-border/60 bg-card/80 p-4 shadow-sm"
+                        >
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
+                                <span className="font-semibold text-foreground">
+                                  {formatRecordTimestamp(entry.createdAt)}
+                                </span>
+                                <Badge variant="outline">{entry.periodLabel}</Badge>
+                                <Badge variant="secondary">{entry.targetGroupLabel}</Badge>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                                <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5">
+                                  <MapPin className="h-3 w-3 text-primary" />
+                                  <span className="leading-none">{entry.location}</span>
+                                </span>
+                                {entry.createdBy ? (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5">
+                                    <UserCheck className="h-3 w-3 text-primary/80" />
+                                    <span className="leading-none">{entry.createdBy}</span>
+                                  </span>
+                                ) : null}
+                              </div>
+                            </div>
+                            <div className="flex flex-col items-start gap-2 sm:items-end">
+                              <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold ${toneClass}`}>
+                                {formatDelta(entry.diff.total)} คน
+                              </span>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-8 px-3 text-xs"
+                                onClick={() => handleOpenAdjustmentDetail(entry)}
+                              >
+                                ดูรายละเอียด
+                              </Button>
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                            <span>ปกติ {formatDelta(entry.diff.normal)}</span>
+                            <span>เสี่ยง {formatDelta(entry.diff.risk)}</span>
+                            <span>ป่วย {formatDelta(entry.diff.sick)}</span>
+                          </div>
+                          {entry.reason ? (
+                            <p className="text-xs leading-relaxed text-muted-foreground/80">
+                              เหตุผล: {entry.reason}
+                            </p>
+                          ) : null}
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-muted/60 bg-muted/20 px-4 py-8 text-center text-sm text-muted-foreground">
+                      ไม่พบประวัติการปรับยอดสำหรับตัวกรองนี้
                     </div>
                   )}
                 </CardContent>
+                {totalAdjustmentCount ? (
+                  <CardFooter className="flex flex-col gap-3 border-t border-border/60 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+                    <span className="text-xs text-muted-foreground">
+                      หน้า {adjustmentHistoryPage.toLocaleString()} /{" "}
+                      {totalAdjustmentPages.toLocaleString()}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-8 px-3 text-xs"
+                        onClick={() =>
+                          setAdjustmentHistoryPage((prev) => Math.max(1, prev - 1))
+                        }
+                        disabled={adjustmentHistoryPage === 1}
+                      >
+                        ก่อนหน้า
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-8 px-3 text-xs"
+                        onClick={() =>
+                          setAdjustmentHistoryPage((prev) =>
+                            Math.min(totalAdjustmentPages, prev + 1)
+                          )
+                        }
+                        disabled={adjustmentHistoryPage >= totalAdjustmentPages}
+                      >
+                        ถัดไป
+                      </Button>
+                    </div>
+                  </CardFooter>
+                ) : null}
               </Card>
+
+              <Dialog open={adjustmentDetailOpen} onOpenChange={handleAdjustmentDetailChange}>
+                <DialogContent className="flex max-h-[calc(100vh-4rem)] max-w-[calc(100vw-4rem)] flex-col overflow-hidden p-0 sm:max-w-2xl">
+                  <DialogHeader className="border-b px-6 py-4">
+                    <DialogTitle>รายละเอียดการปรับยอด</DialogTitle>
+                    <DialogDescription>
+                      {selectedAdjustmentEntry
+                        ? `${selectedAdjustmentEntry.periodLabel} · ${selectedAdjustmentEntry.location}`
+                        : "รายละเอียดการปรับยอด"}
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="flex-1 overflow-auto px-6 py-4">
+                    {selectedAdjustmentEntry ? (
+                      <div className="space-y-4 text-sm">
+                        <div className="grid gap-2 text-xs sm:text-sm">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-muted-foreground">วันเวลาที่บันทึก</span>
+                            <span className="font-medium">
+                              {formatRecordTimestamp(selectedAdjustmentEntry.createdAt)}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-muted-foreground">พื้นที่</span>
+                            <span className="font-medium text-right">
+                              {selectedAdjustmentEntry.location}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-muted-foreground">กลุ่มเป้าหมาย</span>
+                            <span className="font-medium">
+                              {selectedAdjustmentEntry.targetGroupLabel}
+                            </span>
+                          </div>
+                          {selectedAdjustmentEntry.createdBy ? (
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-muted-foreground">ผู้บันทึก</span>
+                              <span className="font-medium">
+                                {selectedAdjustmentEntry.createdBy}
+                              </span>
+                            </div>
+                          ) : null}
+                          {selectedAdjustmentEntry.reason ? (
+                            <div className="flex flex-col gap-1 text-left">
+                              <span className="text-muted-foreground">เหตุผลการปรับ</span>
+                              <span className="font-medium leading-relaxed">
+                                {selectedAdjustmentEntry.reason}
+                              </span>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="rounded-md border bg-muted/20 p-3">
+                          <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                            ภาพรวม (คน)
+                          </p>
+                          <div className="mt-2 grid gap-2 text-xs sm:text-sm md:grid-cols-3">
+                            <div>
+                              <p className="text-muted-foreground">ก่อนปรับ</p>
+                              <p className="font-semibold">
+                                {selectedAdjustmentEntry.baselineOverview
+                                  ? selectedAdjustmentEntry.baselineOverview.total.toLocaleString()
+                                  : "-"}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-muted-foreground">หลังปรับ</p>
+                              <p className="font-semibold text-primary">
+                                {selectedAdjustmentEntry.proposedOverview
+                                  ? selectedAdjustmentEntry.proposedOverview.total.toLocaleString()
+                                  : (
+                                      (selectedAdjustmentEntry.baselineOverview?.total ?? 0) +
+                                      selectedAdjustmentEntry.diff.total
+                                    ).toLocaleString()}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-muted-foreground">เปลี่ยนแปลง</p>
+                              <p className="font-semibold">
+                                {formatDelta(selectedAdjustmentEntry.diff.total)}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                        {adjustmentDetailRows.length ? (
+                          <div className="space-y-2">
+                            <h4 className="text-sm font-semibold">รายละเอียดตามหมวดหมู่</h4>
+                            <div className="space-y-2">
+                              {adjustmentDetailRows.map((row) => (
+                                <div
+                                  key={row.key}
+                                  className="rounded-md border bg-background/80 p-3 text-xs sm:text-sm"
+                                >
+                                  <p className="font-medium text-sm">{row.title}</p>
+                                  <div className="mt-2 grid gap-2 md:grid-cols-2">
+                                    <div>
+                                      <p className="text-muted-foreground">ก่อนปรับ</p>
+                                      <p>
+                                        ปกติ {row.baseline.normal.toLocaleString()} · เสี่ยง{" "}
+                                        {row.baseline.risk.toLocaleString()} · ป่วย{" "}
+                                        {row.baseline.sick.toLocaleString()}
+                                      </p>
+                                    </div>
+                                    <div>
+                                      <p className="text-muted-foreground">หลังปรับ</p>
+                                      <p>
+                                        ปกติ {row.proposed.normal.toLocaleString()} · เสี่ยง{" "}
+                                        {row.proposed.risk.toLocaleString()} · ป่วย{" "}
+                                        {row.proposed.sick.toLocaleString()}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <p className="mt-1 text-xs text-muted-foreground">
+                                    เปลี่ยนแปลง {formatDelta(row.diff.normal)} ปกติ ·{" "}
+                                    {formatDelta(row.diff.risk)} เสี่ยง · {formatDelta(row.diff.sick)} ป่วย
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">
+                            ไม่มีรายละเอียดเพิ่มเติมสำหรับรายการนี้
+                          </p>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                  <DialogFooter className="border-t px-6 py-4">
+                    <DialogClose asChild>
+                      <Button type="button" variant="outline" className="px-4">
+                        ปิด
+                      </Button>
+                    </DialogClose>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+                </>
+              ) : null}
             </TabsContent>
 
             <TabsContent value="districts" className="space-y-6">

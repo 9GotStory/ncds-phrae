@@ -1160,19 +1160,31 @@ const Detail = () => {
 
     const riskPercentChange = percentChange(latestRisk, previousRisk);
     const sickPercentChange = percentChange(latestSick, previousSick);
+    const riskAbsoluteChange = Math.round(latestRisk - previousRisk);
+    const sickAbsoluteChange = Math.round(latestSick - previousSick);
+
+    const formatChangeDetail = (diff: number) => {
+      if (diff === 0) {
+        return "เทียบเดือนก่อนเท่าเดิม";
+      }
+      const direction = diff > 0 ? "เพิ่มขึ้น" : "ลดลง";
+      return `${direction} ${Math.abs(diff).toLocaleString()} คนจากเดือนก่อน`;
+    };
 
     if (riskPercentChange >= 20) {
       insights.push({
         title: "ความเสี่ยงเพิ่มสูง",
-        description: `เพิ่มขึ้น ${riskPercentChange.toFixed(1)}% เทียบเดือนก่อน`,
+        description: formatChangeDetail(riskAbsoluteChange),
         variant: "warning",
       });
     }
 
     if (!insights.length && riskPercentChange <= -10 && sickPercentChange <= -10) {
+      const riskDecreaseText = `เสี่ยงลดลง ${Math.abs(riskAbsoluteChange).toLocaleString()} คน`;
+      const sickDecreaseText = `ป่วยลดลง ${Math.abs(sickAbsoluteChange).toLocaleString()} คน`;
       insights.push({
         title: "แนวโน้มดีขึ้น",
-        description: `เสี่ยง -${Math.abs(riskPercentChange).toFixed(1)}% · ป่วย -${Math.abs(sickPercentChange).toFixed(1)}%`,
+        description: `${riskDecreaseText} · ${sickDecreaseText} (เทียบเดือนก่อน)`,
         variant: "success",
       });
     }
@@ -2138,17 +2150,7 @@ const Detail = () => {
                       </div>
                     </div>
 
-                    <div className="rounded-lg border bg-muted/30 p-4">
-                      <p className="text-sm font-medium text-foreground">
-                        พื้นที่ที่มีข้อมูลในชุดกรองนี้
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        รวม {locationAggregates.length.toLocaleString()} หมู่บ้าน/ชุมชนในตัวกรองปัจจุบัน
-                      </p>
-                      <p className="mt-2 text-xs text-muted-foreground">
-                        ครอบคลุมข้อมูลคัดกรอง {detailRows.length.toLocaleString()} รายการ
-                      </p>
-                    </div>
+                    
 
                   </CardContent>
                 </Card>
@@ -2201,13 +2203,16 @@ const Detail = () => {
               <Card>
                 <CardHeader>
                   <CardTitle>รายละเอียดข้อมูลรายพื้นที่</CardTitle>
+                  <CardDescription>
+                    ค้นหาด้วยชื่ออำเภอ ตำบล หมู่บ้าน หมู่ที่ หรือช่วงเวลาเพื่อกรองรายการ
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <Input
                       value={locationSearchTerm}
                       onChange={(event) => setLocationSearchTerm(event.target.value)}
-                      placeholder="ค้นหาในตาราง..."
+                      placeholder="ค้นหาอำเภอ / ตำบล / หมู่บ้าน / หมู่ที่ หรือช่วงเวลา"
                       className="w-full sm:w-64"
                       disabled={!hasAnyData}
                     />
