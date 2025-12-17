@@ -9,10 +9,9 @@ import {
   Users,
   UserCheck,
   AlertTriangle,
+  Award,
   Stethoscope,
-  Filter,
-  ChevronDown,
-  ChevronUp,
+  TrendingUp,
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
@@ -101,7 +100,8 @@ const THAI_MONTH_LABELS = [
   "พฤศจิกายน",
   "ธันวาคม",
 ];
-
+const DETAIL_STALE_TIME = 60 * 1000;
+const DETAIL_GC_TIME = 5 * 60 * 1000;
 const RECORDS_PAGE_SIZE = 250;
 const MAX_BACKGROUND_PAGES = 50;
 
@@ -120,7 +120,6 @@ const Detail = () => {
   );
   const [locationSearchTerm, setLocationSearchTerm] = useState("");
   const [showReferMetrics, setShowReferMetrics] = useState(true);
-  const [isFilterOpen, setIsFilterOpen] = useState(false);
 
   useEffect(() => {
     if (user?.role === "officer" && user.district) {
@@ -211,6 +210,8 @@ const Detail = () => {
         },
         { signal }
       ),
+    staleTime: DETAIL_STALE_TIME,
+    gcTime: DETAIL_GC_TIME,
   });
 
   const data = detailQuery.data;
@@ -328,6 +329,8 @@ const Detail = () => {
         },
         { signal }
       ),
+    staleTime: DETAIL_STALE_TIME,
+    gcTime: DETAIL_GC_TIME,
   });
 
   useEffect(() => {
@@ -1204,6 +1207,86 @@ const Detail = () => {
     ? totalRefer / referLocations.length
     : 0;
 
+  const significantChanges = useMemo(() => {
+    if (!summary || !data?.lineChart || data.lineChart.labels.length < 2) {
+      return [];
+    }
+
+    const datasets = data.lineChart.datasets ?? [];
+    const normalDataset = datasets.find((item) => item.label === "ปกติ");
+    const riskDataset = datasets.find((item) => item.label === "เสี่ยง");
+    const sickDataset = datasets.find((item) => item.label === "ป่วย");
+
+    const normalValues = Array.isArray(normalDataset?.data)
+      ? normalDataset?.data
+      : [];
+    const riskValues = Array.isArray(riskDataset?.data)
+      ? riskDataset?.data
+      : [];
+    const sickValues = Array.isArray(sickDataset?.data)
+      ? sickDataset?.data
+      : [];
+
+    const previousRisk = Number(riskValues[riskValues.length - 2] ?? 0);
+    const latestRisk = Number(riskValues[riskValues.length - 1] ?? 0);
+    const previousSick = Number(sickValues[sickValues.length - 2] ?? 0);
+    const latestSick = Number(sickValues[sickValues.length - 1] ?? 0);
+
+    const percentChange = (latest: number, previous: number) => {
+      if (previous <= 0) {
+        return latest > 0 ? 100 : 0;
+      }
+      return ((latest - previous) / previous) * 100;
+    };
+
+    const insights: Array<{
+      title: string;
+      description: string;
+      variant: "warning" | "destructive" | "success";
+    }> = [];
+
+    const riskPercentChange = percentChange(latestRisk, previousRisk);
+    const sickPercentChange = percentChange(latestSick, previousSick);
+    const riskAbsoluteChange = Math.round(latestRisk - previousRisk);
+    const sickAbsoluteChange = Math.round(latestSick - previousSick);
+
+    const formatChangeDetail = (diff: number) => {
+      if (diff === 0) {
+        return "เทียบเดือนก่อนเท่าเดิม";
+      }
+      const direction = diff > 0 ? "เพิ่มขึ้น" : "ลดลง";
+      return `${direction} ${Math.abs(diff).toLocaleString()} คนจากเดือนก่อน`;
+    };
+
+    if (riskPercentChange >= 20) {
+      insights.push({
+        title: "ความเสี่ยงเพิ่มสูง",
+        description: formatChangeDetail(riskAbsoluteChange),
+        variant: "warning",
+      });
+    }
+
+    if (
+      !insights.length &&
+      riskPercentChange <= -10 &&
+      sickPercentChange <= -10
+    ) {
+      const riskDecreaseText = `เสี่ยงลดลง ${Math.abs(
+        riskAbsoluteChange
+      ).toLocaleString()} คน`;
+      const sickDecreaseText = `ป่วยลดลง ${Math.abs(
+        sickAbsoluteChange
+      ).toLocaleString()} คน`;
+      insights.push({
+        title: "แนวโน้มดีขึ้น",
+        description: `${riskDecreaseText} · ${sickDecreaseText} (เทียบเดือนก่อน)`,
+        variant: "success",
+      });
+    }
+
+    return insights;
+  }, [data?.lineChart, summary]);
+
   const selectedPeriodLabel = useMemo(() => {
     if (!appliedFilters) {
       return "ทั้งหมด";
@@ -1333,8 +1416,6 @@ const Detail = () => {
         : "ไม่มีข้อมูล",
       icon: Stethoscope,
       variant: "default" as const,
-      baseline: 0,
-      diff: 0,
     });
 
     return stats;
@@ -1346,6 +1427,95 @@ const Detail = () => {
     totalRefer,
   ]);
 
+  const locationInsights = useMemo(() => {
+    if (!appliedFilters || !summary) {
+      return [];
+    }
+    const insights: Array<{ title: string; description: string }> = [];
+    insights.push({
+      title: "ช่วงเวลาที่แสดงผล",
+      description: `${selectedPeriodLabel} รวม ${totalPeople.toLocaleString()} คน`,
+    });
+
+    if (highestRiskEntry) {
+      insights.push({
+        title: "พื้นที่ที่มีจำนวนกลุ่มเสี่ยงสูง",
+        description: `${formatLocation(
+          highestRiskEntry
+        )} เสี่ยง ${highestRiskEntry.risk.toLocaleString()} คน`,
+      });
+    }
+
+    if (highestRiskRatioEntry && highestRiskRatioEntry.total > 0) {
+      insights.push({
+        title: "อัตราความเสี่ยงสูงสุด",
+        description: `${formatLocation(highestRiskRatioEntry)} คิดเป็น ${(
+          (highestRiskRatioEntry.risk / highestRiskRatioEntry.total) *
+          100
+        ).toFixed(1)}% ของพื้นที่นั้น`,
+      });
+    }
+
+    if (highestSickEntry && highestSickEntry.sick > 0) {
+      insights.push({
+        title: "พื้นที่ที่พบผู้ป่วยมากที่สุด",
+        description: `${formatLocation(
+          highestSickEntry
+        )} ป่วย ${highestSickEntry.sick.toLocaleString()} คน`,
+      });
+    }
+
+    if (totalRefer > 0) {
+      insights.push({
+        title: "การส่งต่อผู้ป่วย",
+        description: `ส่งต่อ ${totalRefer.toLocaleString()} ครั้ง · เฉลี่ย ${averageRefer.toFixed(
+          1
+        )} ครั้ง/พื้นที่`,
+      });
+    }
+
+    return insights.slice(0, 4);
+  }, [
+    appliedFilters,
+    averageRefer,
+    highestRiskEntry,
+    highestRiskRatioEntry,
+    highestSickEntry,
+    selectedPeriodLabel,
+    formatLocation,
+    summary,
+    totalPeople,
+    totalRefer,
+  ]);
+
+  const quickHighlights = useMemo(() => {
+    const items: Array<{
+      id: string;
+      title: string;
+      detail: string;
+      tone: "muted" | "success" | "warning" | "destructive";
+    }> = [];
+
+    significantChanges.forEach((item, index) => {
+      items.push({
+        id: `change-${index}`,
+        title: item.title,
+        detail: item.description,
+        tone: item.variant,
+      });
+    });
+
+    locationInsights.forEach((insight, index) => {
+      items.push({
+        id: `insight-${index}`,
+        title: insight.title,
+        detail: insight.description,
+        tone: "muted",
+      });
+    });
+
+    return items.slice(0, 6);
+  }, [locationInsights, significantChanges]);
   const renderFactorGrid = (mode: "absolute" | "percentage") => {
     const isPercentage = mode === "percentage";
     const formatValue = (value: number, base: number) => {
@@ -1508,16 +1678,14 @@ const Detail = () => {
     <div className="min-h-screen bg-background">
       <Navigation />
 
-      <main className="container mx-auto px-4 py-8 space-y-6">
-        <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <h2 className="text-3xl md:text-4xl font-bold">
-              รายละเอียดข้อมูลอำเภอ
-            </h2>
-            <p className="text-muted-foreground">
-              วิเคราะห์ข้อมูลเชิงลึกแยกตามพื้นที่และช่วงเวลา
-            </p>
-          </div>
+      <main className="container mx-auto px-4 py-8 space-y-8">
+        <header className="space-y-2">
+          <h2 className="text-3xl md:text-4xl font-bold">
+            รายละเอียดข้อมูลอำเภอ
+          </h2>
+          <p className="text-muted-foreground">
+            วิเคราะห์ข้อมูลเชิงลึกแยกตามพื้นที่และช่วงเวลา
+          </p>
         </header>
 
         {isError && (
@@ -1528,283 +1696,230 @@ const Detail = () => {
           </Card>
         )}
 
-        {/* Collapsible Filters */}
         <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="flex items-center gap-2 text-lg font-semibold">
-                <Filter className="w-5 h-5" />
-                ตัวกรองข้อมูล
-              </CardTitle>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+              <Search className="w-4 h-4" />
+              ตัวกรองข้อมูล
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div>
+                <span className="text-sm font-medium flex items-center gap-2">
+                  <Target className="w-4 h-4 text-primary" />
+                  กลุ่มเป้าหมาย
+                </span>
+                <Select
+                  value={currentFilters.targetGroup}
+                  onValueChange={(value) =>
+                    handleCurrentFilterChange("targetGroup", value)
+                  }
+                >
+                  <SelectTrigger className="mt-2">
+                    <SelectValue placeholder="เลือกกลุ่มเป้าหมาย" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {targetGroupOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <span className="text-sm font-medium flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-primary" />
+                  อำเภอ
+                </span>
+                <Select
+                  value={currentFilters.district || ALL_DISTRICT_VALUE}
+                  onValueChange={(value) =>
+                    handleCurrentFilterChange(
+                      "district",
+                      value === ALL_DISTRICT_VALUE ? "" : value
+                    )
+                  }
+                  disabled={
+                    user?.role === "officer" || !availability?.districts?.length
+                  }
+                >
+                  <SelectTrigger className="mt-2">
+                    <SelectValue placeholder="เลือกอำเภอ" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={ALL_DISTRICT_VALUE}>ทั้งหมด</SelectItem>
+                    {availability?.districts.map((district) => (
+                      <SelectItem key={district} value={district}>
+                        {district}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <span className="text-sm font-medium flex items-center gap-2">
+                  <MapPin className="w-4 h-4 text-primary" />
+                  ตำบล
+                </span>
+                <Select
+                  value={currentFilters.subdistrict || ALL_SUBDISTRICT_VALUE}
+                  onValueChange={(value) =>
+                    handleCurrentFilterChange(
+                      "subdistrict",
+                      value === ALL_SUBDISTRICT_VALUE ? "" : value
+                    )
+                  }
+                  disabled={!subdistrictOptions.length}
+                >
+                  <SelectTrigger className="mt-2">
+                    <SelectValue placeholder="เลือกตำบล" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={ALL_SUBDISTRICT_VALUE}>
+                      ทั้งหมด
+                    </SelectItem>
+                    {subdistrictOptions.map((subdistrict) => (
+                      <SelectItem key={subdistrict} value={subdistrict}>
+                        {subdistrict}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <span className="text-sm font-medium flex items-center gap-2">
+                  <MapPin className="w-4 h-4 text-primary" />
+                  หมู่บ้าน
+                </span>
+                <Select
+                  value={currentFilters.village || ALL_VILLAGE_VALUE}
+                  onValueChange={(value) =>
+                    handleCurrentFilterChange(
+                      "village",
+                      value === ALL_VILLAGE_VALUE ? "" : value
+                    )
+                  }
+                  disabled={!villageOptions.length}
+                >
+                  <SelectTrigger className="mt-2">
+                    <SelectValue placeholder="เลือกหมู่บ้าน" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={ALL_VILLAGE_VALUE}>ทั้งหมด</SelectItem>
+                    {villageOptions.map((village) => (
+                      <SelectItem key={village} value={village}>
+                        {village}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <span className="text-sm font-medium flex items-center gap-2">
+                  <MapPin className="w-4 h-4 text-primary" />
+                  หมู่ที่
+                </span>
+                <Select
+                  value={currentFilters.moo || ALL_MOO_VALUE}
+                  onValueChange={(value) =>
+                    handleCurrentFilterChange(
+                      "moo",
+                      value === ALL_MOO_VALUE ? "" : value
+                    )
+                  }
+                  disabled={!mooOptions.length}
+                >
+                  <SelectTrigger className="mt-2">
+                    <SelectValue placeholder="เลือกหมู่" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={ALL_MOO_VALUE}>ทั้งหมด</SelectItem>
+                    {mooOptions.map((moo) => (
+                      <SelectItem key={moo} value={moo}>
+                        {moo.toLowerCase().startsWith("หมู่")
+                          ? moo
+                          : `หมู่ที่ ${moo}`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <span className="text-sm font-medium flex items-center gap-2">
+                  <ActivitySquare className="w-4 h-4 text-primary" />
+                  ปี
+                </span>
+                <Select
+                  value={currentFilters.year || ALL_YEAR_VALUE}
+                  onValueChange={(value) =>
+                    handleCurrentFilterChange(
+                      "year",
+                      value === ALL_YEAR_VALUE ? "" : value
+                    )
+                  }
+                  disabled={!availability?.years?.length}
+                >
+                  <SelectTrigger className="mt-2">
+                    <SelectValue placeholder="เลือกปี" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={ALL_YEAR_VALUE}>ทั้งหมด</SelectItem>
+                    {availability?.years.map((year) => (
+                      <SelectItem key={year} value={String(year)}>
+                        {year}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <span className="text-sm font-medium flex items-center gap-2">
+                  <ActivitySquare className="w-4 h-4 text-primary" />
+                  เดือน
+                </span>
+                <Select
+                  value={currentFilters.month || ALL_MONTH_VALUE}
+                  onValueChange={(value) =>
+                    handleCurrentFilterChange(
+                      "month",
+                      value === ALL_MONTH_VALUE ? "" : value
+                    )
+                  }
+                  disabled={!currentFilters.year || !monthOptions.length}
+                >
+                  <SelectTrigger className="mt-2">
+                    <SelectValue placeholder="เลือกเดือน" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={ALL_MONTH_VALUE}>ทั้งหมด</SelectItem>
+                    {monthOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="flex justify-center md:justify-end">
               <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setIsFilterOpen(!isFilterOpen)}
-                className="text-muted-foreground hover:text-foreground"
+                onClick={handleSearch}
+                className="gap-2"
+                disabled={isSearchDisabled}
               >
-                {isFilterOpen ? (
-                  <>
-                    <ChevronUp className="w-4 h-4 mr-2" />
-                    ซ่อนตัวกรอง
-                  </>
-                ) : (
-                  <>
-                    <ChevronDown className="w-4 h-4 mr-2" />
-                    แสดงตัวกรอง
-                  </>
-                )}
+                <Search className="w-4 h-4" />
+                ค้นหาข้อมูล
               </Button>
             </div>
-            {!isFilterOpen && appliedFilters && (
-               <div className="flex flex-wrap items-center gap-2 mt-2 text-sm text-muted-foreground">
-                  <Badge variant="secondary" className="font-normal">
-                    {activeFilters.targetGroup === "monk" ? "พระสงฆ์" : "บุคคลทั่วไป"}
-                  </Badge>
-                  {activeFilters.district && (
-                    <Badge variant="outline" className="font-normal">
-                      อำเภอ: {activeFilters.district}
-                    </Badge>
-                  )}
-                  {activeFilters.subdistrict && (
-                     <Badge variant="outline" className="font-normal">
-                      ตำบล: {activeFilters.subdistrict}
-                    </Badge>
-                  )}
-                  {activeFilters.village && (
-                     <Badge variant="outline" className="font-normal">
-                      หมู่บ้าน: {activeFilters.village}
-                    </Badge>
-                  )}
-                  {activeFilters.year && (
-                     <Badge variant="outline" className="font-normal">
-                      {selectedPeriodLabel}
-                    </Badge>
-                  )}
-               </div>
-            )}
-          </CardHeader>
-          {isFilterOpen && (
-            <CardContent className="space-y-6 animate-in slide-in-from-top-2 duration-200">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div>
-                  <span className="text-sm font-medium flex items-center gap-2">
-                    <Target className="w-4 h-4 text-primary" />
-                    กลุ่มเป้าหมาย
-                  </span>
-                  <Select
-                    value={currentFilters.targetGroup}
-                    onValueChange={(value) =>
-                      handleCurrentFilterChange("targetGroup", value)
-                    }
-                  >
-                    <SelectTrigger className="mt-2">
-                      <SelectValue placeholder="เลือกกลุ่มเป้าหมาย" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {targetGroupOptions.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <span className="text-sm font-medium flex items-center gap-2">
-                    <Layers className="w-4 h-4 text-primary" />
-                    อำเภอ
-                  </span>
-                  <Select
-                    value={currentFilters.district || ALL_DISTRICT_VALUE}
-                    onValueChange={(value) =>
-                      handleCurrentFilterChange(
-                        "district",
-                        value === ALL_DISTRICT_VALUE ? "" : value
-                      )
-                    }
-                    disabled={
-                      user?.role === "officer" || !availability?.districts?.length
-                    }
-                  >
-                    <SelectTrigger className="mt-2">
-                      <SelectValue placeholder="เลือกอำเภอ" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={ALL_DISTRICT_VALUE}>ทั้งหมด</SelectItem>
-                      {availability?.districts.map((district) => (
-                        <SelectItem key={district} value={district}>
-                          {district}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <span className="text-sm font-medium flex items-center gap-2">
-                    <MapPin className="w-4 h-4 text-primary" />
-                    ตำบล
-                  </span>
-                  <Select
-                    value={currentFilters.subdistrict || ALL_SUBDISTRICT_VALUE}
-                    onValueChange={(value) =>
-                      handleCurrentFilterChange(
-                        "subdistrict",
-                        value === ALL_SUBDISTRICT_VALUE ? "" : value
-                      )
-                    }
-                    disabled={!subdistrictOptions.length}
-                  >
-                    <SelectTrigger className="mt-2">
-                      <SelectValue placeholder="เลือกตำบล" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={ALL_SUBDISTRICT_VALUE}>
-                        ทั้งหมด
-                      </SelectItem>
-                      {subdistrictOptions.map((subdistrict) => (
-                        <SelectItem key={subdistrict} value={subdistrict}>
-                          {subdistrict}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <span className="text-sm font-medium flex items-center gap-2">
-                    <MapPin className="w-4 h-4 text-primary" />
-                    หมู่บ้าน
-                  </span>
-                  <Select
-                    value={currentFilters.village || ALL_VILLAGE_VALUE}
-                    onValueChange={(value) =>
-                      handleCurrentFilterChange(
-                        "village",
-                        value === ALL_VILLAGE_VALUE ? "" : value
-                      )
-                    }
-                    disabled={!villageOptions.length}
-                  >
-                    <SelectTrigger className="mt-2">
-                      <SelectValue placeholder="เลือกหมู่บ้าน" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={ALL_VILLAGE_VALUE}>ทั้งหมด</SelectItem>
-                      {villageOptions.map((village) => (
-                        <SelectItem key={village} value={village}>
-                          {village}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <span className="text-sm font-medium flex items-center gap-2">
-                    <MapPin className="w-4 h-4 text-primary" />
-                    หมู่ที่
-                  </span>
-                  <Select
-                    value={currentFilters.moo || ALL_MOO_VALUE}
-                    onValueChange={(value) =>
-                      handleCurrentFilterChange(
-                        "moo",
-                        value === ALL_MOO_VALUE ? "" : value
-                      )
-                    }
-                    disabled={!mooOptions.length}
-                  >
-                    <SelectTrigger className="mt-2">
-                      <SelectValue placeholder="เลือกหมู่" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={ALL_MOO_VALUE}>ทั้งหมด</SelectItem>
-                      {mooOptions.map((moo) => (
-                        <SelectItem key={moo} value={moo}>
-                          {moo.toLowerCase().startsWith("หมู่")
-                            ? moo
-                            : `หมู่ที่ ${moo}`}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <span className="text-sm font-medium flex items-center gap-2">
-                    <ActivitySquare className="w-4 h-4 text-primary" />
-                    ปี
-                  </span>
-                  <Select
-                    value={currentFilters.year || ALL_YEAR_VALUE}
-                    onValueChange={(value) =>
-                      handleCurrentFilterChange(
-                        "year",
-                        value === ALL_YEAR_VALUE ? "" : value
-                      )
-                    }
-                    disabled={!availability?.years?.length}
-                  >
-                    <SelectTrigger className="mt-2">
-                      <SelectValue placeholder="เลือกปี" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={ALL_YEAR_VALUE}>ทั้งหมด</SelectItem>
-                      {availability?.years.map((year) => (
-                        <SelectItem key={year} value={String(year)}>
-                          {year}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <span className="text-sm font-medium flex items-center gap-2">
-                    <ActivitySquare className="w-4 h-4 text-primary" />
-                    เดือน
-                  </span>
-                  <Select
-                    value={currentFilters.month || ALL_MONTH_VALUE}
-                    onValueChange={(value) =>
-                      handleCurrentFilterChange(
-                        "month",
-                        value === ALL_MONTH_VALUE ? "" : value
-                      )
-                    }
-                    disabled={!currentFilters.year || !monthOptions.length}
-                  >
-                    <SelectTrigger className="mt-2">
-                      <SelectValue placeholder="เลือกเดือน" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={ALL_MONTH_VALUE}>ทั้งหมด</SelectItem>
-                      {monthOptions.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div className="flex justify-center md:justify-end border-t pt-4">
-                <Button
-                  onClick={() => {
-                     handleSearch();
-                     setIsFilterOpen(false); // Auto close on search for better UX
-                  }}
-                  className="gap-2 w-full md:w-auto"
-                  disabled={isSearchDisabled}
-                >
-                  <Search className="w-4 h-4" />
-                  ค้นหาข้อมูล
-                </Button>
-              </div>
-            </CardContent>
-          )}
+          </CardContent>
         </Card>
 
         {!appliedFilters ? (
@@ -1818,220 +1933,376 @@ const Detail = () => {
           <LoadingState message="กำลังโหลดข้อมูลรายละเอียด..." />
         ) : (
           <>
-            {summary ? (
-              <>
-                {/* 1. Metric Stats (Top Priority) */}
-                <section className="space-y-6">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
-                    {detailStats.map((stat) => {
-                      const details: Array<{
-                        label: string;
-                        value: string;
-                        tone?:
-                          | "default"
-                          | "muted"
-                          | "success"
-                          | "warning"
-                          | "destructive";
-                      }> = [];
+            <section className="space-y-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <Badge variant="outline">
+                  ช่วงเวลา: {selectedPeriodLabel || "ไม่ระบุ"}
+                </Badge>
+                {activeFilters?.district && (
+                  <Badge variant="outline">
+                    อำเภอ: {activeFilters.district}
+                  </Badge>
+                )}
+                {activeFilters?.subdistrict && (
+                  <Badge variant="outline">
+                    ตำบล: {activeFilters.subdistrict}
+                  </Badge>
+                )}
+                {activeFilters?.village && (
+                  <Badge variant="outline">
+                    หมู่บ้าน: {activeFilters.village}
+                  </Badge>
+                )}
+                {activeFilters?.moo && (
+                  <Badge variant="outline">หมู่ที่: {activeFilters.moo}</Badge>
+                )}
+              </div>
 
-                      if (
-                        typeof stat.baseline === "number" &&
-                        Number.isFinite(stat.baseline) &&
-                        stat.key !== "refer"
-                      ) {
-                        details.push({
-                          label: "ก่อนปรับ",
-                          value: formatMetricWithUnit(stat.baseline),
-                          tone: "muted",
-                        });
-                      }
-                      if (
-                        typeof stat.diff === "number" &&
-                        Number.isFinite(stat.diff) &&
-                        stat.key !== "refer"
-                      ) {
-                        details.push({
-                          label: "เปลี่ยนแปลง",
-                          value: formatMetricDelta(stat.diff),
-                          tone: metricTone(
-                            stat.key as SummaryMetricKey,
-                            stat.diff
-                          ),
-                        });
-                      }
+              {summary ? (
+                <>
+                  <section className="space-y-6">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+                      {detailStats.map((stat) => {
+                        const details: Array<{
+                          label: string;
+                          value: string;
+                          tone?:
+                            | "default"
+                            | "muted"
+                            | "success"
+                            | "warning"
+                            | "destructive";
+                        }> = [];
 
-                      return (
-                        <StatsCard
-                          key={stat.key}
-                          title={stat.title}
-                          value={stat.value}
-                          percentage={stat.percentage}
-                          icon={stat.icon}
-                          variant={stat.variant}
-                          details={details}
-                          delta={
-                            typeof stat.diff === "number" &&
-                            Number.isFinite(stat.diff) &&
-                            stat.key !== "refer"
-                              ? {
-                                  value: formatMetricDelta(stat.diff),
-                                  trend: metricTrend(stat.diff),
-                                  label: "เทียบก่อนปรับ",
+                        if (
+                          typeof stat.baseline === "number" &&
+                          Number.isFinite(stat.baseline) &&
+                          stat.key !== "refer"
+                        ) {
+                          details.push({
+                            label: "ก่อนปรับ",
+                            value: formatMetricWithUnit(stat.baseline),
+                            tone: "muted",
+                          });
+                        }
+                        if (
+                          typeof stat.diff === "number" &&
+                          Number.isFinite(stat.diff) &&
+                          stat.key !== "refer"
+                        ) {
+                          details.push({
+                            label: "เปลี่ยนแปลง",
+                            value: formatMetricDelta(stat.diff),
+                            tone: metricTone(
+                              stat.key as SummaryMetricKey,
+                              stat.diff
+                            ),
+                          });
+                        }
+
+                        return (
+                          <StatsCard
+                            key={stat.key}
+                            title={stat.title}
+                            value={stat.value}
+                            percentage={stat.percentage}
+                            icon={stat.icon}
+                            variant={stat.variant}
+                            details={details}
+                            delta={
+                              typeof stat.diff === "number" &&
+                              Number.isFinite(stat.diff) &&
+                              stat.key !== "refer"
+                                ? {
+                                    value: formatMetricDelta(stat.diff),
+                                    trend: metricTrend(stat.diff),
+                                    label: "เทียบก่อนปรับ",
+                                  }
+                                : undefined
+                            }
+                          />
+                        );
+                      })}
+                    </div>
+
+                    <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                      <Card>
+                        <CardHeader className="pb-2">
+                          <CardTitle className="flex items-center gap-2">
+                            <TrendingUp className="h-5 w-5 text-primary" />
+                            ไฮไลต์ล่าสุด
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          {quickHighlights.length ? (
+                            <ul className="space-y-2">
+                              {quickHighlights.map((item) => {
+                                const toneClass =
+                                  item.tone === "success"
+                                    ? "text-success"
+                                    : item.tone === "warning"
+                                    ? "text-warning"
+                                    : item.tone === "destructive"
+                                    ? "text-destructive"
+                                    : "text-muted-foreground";
+                                return (
+                                  <li key={item.id} className="text-sm">
+                                    <p className={`font-semibold ${toneClass}`}>
+                                      {item.title}
+                                    </p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {item.detail}
+                                    </p>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          ) : (
+                            <p className="text-sm text-muted-foreground">
+                              เลือกตัวกรองและกดค้นหาเพื่อดูข้อมูลเชิงลึก
+                            </p>
+                          )}
+                        </CardContent>
+                      </Card>
+
+                      <Card>
+                        <CardHeader className="pb-2">
+                          <CardTitle className="flex items-center gap-2">
+                            <Award className="h-5 w-5 text-warning" />
+                            พื้นที่ที่ต้องเฝ้าระวัง
+                          </CardTitle>
+                          <CardDescription>
+                            5 อันดับแรกตามจำนวนผู้เสี่ยง
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                          {topRiskVillages.length ? (
+                            <div className="space-y-3 text-sm">
+                              {topRiskVillages.map((item, index) => (
+                                <div
+                                  key={`${item.district}-${item.subdistrict}-${item.village}-${index}`}
+                                  className="flex items-start justify-between rounded-md border bg-muted/30 p-3"
+                                >
+                                  <div>
+                                    <p className="font-semibold text-foreground">
+                                      {index + 1}.{" "}
+                                      {item.village || "ไม่ระบุหมู่บ้าน"}
+                                    </p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {[
+                                        selectedMooLabel,
+                                        item.subdistrict,
+                                        item.district,
+                                      ]
+                                        .filter(Boolean)
+                                        .join(" • ")}
+                                    </p>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="text-sm font-medium text-warning">
+                                      {item.risk.toLocaleString()} คน
+                                    </p>
+                                    <p className="text-xs text-muted-foreground">
+                                      ทั้งหมด {item.total.toLocaleString()} คน
+                                    </p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-sm text-muted-foreground">
+                              ยังไม่มีข้อมูลพื้นที่เสี่ยงสำหรับตัวกรองนี้
+                            </p>
+                          )}
+                        </CardContent>
+                      </Card>
+
+                      <Card>
+                        <CardHeader className="pb-2">
+                          <CardTitle className="flex items-center gap-2">
+                            <Stethoscope className="h-5 w-5 text-primary" />
+                            การส่งต่อหน่วยบริการ
+                          </CardTitle>
+                          <CardDescription>
+                            ภาพรวมการส่งต่อในตัวกรองนี้
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-3 text-sm text-muted-foreground">
+                          {totalRefer > 0 ? (
+                            <>
+                              <div className="flex items-center justify-between text-foreground">
+                                <span>จำนวนส่งต่อทั้งหมด</span>
+                                <span className="font-semibold text-primary">
+                                  {totalRefer.toLocaleString()} ครั้ง
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span>พื้นที่ที่มีการส่งต่อ</span>
+                                <span className="font-medium">
+                                  {referLocations.length.toLocaleString()}{" "}
+                                  พื้นที่
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span>เฉลี่ยต่อพื้นที่</span>
+                                <span className="font-medium">
+                                  {averageRefer.toFixed(1)} ครั้ง
+                                </span>
+                              </div>
+                            </>
+                          ) : (
+                            <p className="text-sm text-muted-foreground">
+                              ยังไม่มีการบันทึกข้อมูลการส่งต่อหน่วยบริการในตัวกรองนี้
+                            </p>
+                          )}
+                        </CardContent>
+                      </Card>
+                    </div>
+                  </section>
+
+                  <Separator />
+                </>
+              ) : null}
+
+              <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>สัดส่วนสถานะผู้รับการประเมิน</CardTitle>
+                    <CardDescription>แบ่งสัดส่วนตามสถานะล่าสุด</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {summary && donutData ? (
+                      <div className="max-w-md mx-auto">
+                        <DonutChart data={donutData} />
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">
+                        ไม่มีข้อมูลสำหรับการแสดงในช่วงเวลานี้
+                      </p>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle>แนวโน้มข้อมูลตามช่วงเวลา</CardTitle>
+                    <CardDescription>การเปลี่ยนแปลงรายเดือน</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {Object.keys(groupedData).length > 1 ? (
+                      <LineChart
+                        data={{
+                          labels: Object.keys(groupedData),
+                          datasets: [
+                            {
+                              label: "ปกติ",
+                              data: Object.values(groupedData).map(
+                                (districts) => {
+                                  return Object.values(districts).reduce(
+                                    (total, subdistricts) => {
+                                      return (
+                                        total +
+                                        Object.values(subdistricts).reduce(
+                                          (subTotal, villages) => {
+                                            return (
+                                              subTotal +
+                                              villages.reduce(
+                                                (villageTotal, village) =>
+                                                  villageTotal + village.normal,
+                                                0
+                                              )
+                                            );
+                                          },
+                                          0
+                                        )
+                                      );
+                                    },
+                                    0
+                                  );
                                 }
-                              : undefined
-                          }
-                        />
-                      );
-                    })}
-                  </div>
-                </section>
+                              ),
+                              borderColor: "hsl(var(--success))",
+                              backgroundColor: "hsla(var(--success), 0.1)",
+                              tension: 0.4,
+                            },
+                            {
+                              label: "เสี่ยง",
+                              data: Object.values(groupedData).map(
+                                (districts) => {
+                                  return Object.values(districts).reduce(
+                                    (total, subdistricts) => {
+                                      return (
+                                        total +
+                                        Object.values(subdistricts).reduce(
+                                          (subTotal, villages) => {
+                                            return (
+                                              subTotal +
+                                              villages.reduce(
+                                                (villageTotal, village) =>
+                                                  villageTotal + village.risk,
+                                                0
+                                              )
+                                            );
+                                          },
+                                          0
+                                        )
+                                      );
+                                    },
+                                    0
+                                  );
+                                }
+                              ),
+                              borderColor: "hsl(var(--warning))",
+                              backgroundColor: "hsla(var(--warning), 0.1)",
+                              tension: 0.4,
+                            },
+                            {
+                              label: "ป่วย",
+                              data: Object.values(groupedData).map(
+                                (districts) => {
+                                  return Object.values(districts).reduce(
+                                    (total, subdistricts) => {
+                                      return (
+                                        total +
+                                        Object.values(subdistricts).reduce(
+                                          (subTotal, villages) => {
+                                            return (
+                                              subTotal +
+                                              villages.reduce(
+                                                (villageTotal, village) =>
+                                                  villageTotal + village.sick,
+                                                0
+                                              )
+                                            );
+                                          },
+                                          0
+                                        )
+                                      );
+                                    },
+                                    0
+                                  );
+                                }
+                              ),
+                              borderColor: "hsl(var(--destructive))",
+                              backgroundColor: "hsla(var(--destructive), 0.1)",
+                              tension: 0.4,
+                            },
+                          ],
+                        }}
+                      />
+                    ) : (
+                      <p className="text-sm text-muted-foreground">
+                        ต้องมีข้อมูลหลายช่วงเวลาเพื่อแสดงแนวโน้ม
+                      </p>
+                    )}
+                  </CardContent>
+                </Card>
+              </section>
 
-                <Separator />
+              <Separator />
 
-                 {/* 2. Charts Section */}
-                <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  <Card className="h-full">
-                    <CardHeader>
-                      <CardTitle>สัดส่วนสถานะ</CardTitle>
-                      <CardDescription>ภาพรวมสัดส่วน ปกติ/เสี่ยง/ป่วย</CardDescription>
-                    </CardHeader>
-                    <CardContent className="flex items-center justify-center min-h-[300px]">
-                      {summary && donutData ? (
-                        <div className="w-full max-w-sm">
-                          <DonutChart data={donutData} />
-                        </div>
-                      ) : (
-                        <p className="text-sm text-muted-foreground">
-                          ไม่มีข้อมูลสำหรับการแสดงผล
-                        </p>
-                      )}
-                    </CardContent>
-                  </Card>
-
-                  <Card className="h-full">
-                    <CardHeader>
-                      <CardTitle>แนวโน้มรายเดือน</CardTitle>
-                      <CardDescription>การเปลี่ยนแปลงของยอดรวมในแต่ละกลุ่ม</CardDescription>
-                    </CardHeader>
-                    <CardContent className="min-h-[300px]">
-                      {Object.keys(groupedData).length > 1 ? (
-                        <LineChart
-                          data={{
-                            labels: Object.keys(groupedData),
-                            datasets: [
-                              {
-                                label: "ปกติ",
-                                data: Object.values(groupedData).map(
-                                  (districts) => {
-                                    return Object.values(districts).reduce(
-                                      (total, subdistricts) => {
-                                        return (
-                                          total +
-                                          Object.values(subdistricts).reduce(
-                                            (subTotal, villages) => {
-                                              return (
-                                                subTotal +
-                                                villages.reduce(
-                                                  (villageTotal, village) =>
-                                                    villageTotal + village.normal,
-                                                  0
-                                                )
-                                              );
-                                            },
-                                            0
-                                          )
-                                        );
-                                      },
-                                      0
-                                    );
-                                  }
-                                ),
-                                borderColor: "hsl(var(--success))",
-                                backgroundColor: "hsla(var(--success), 0.1)",
-                                tension: 0.4,
-                              },
-                              {
-                                label: "เสี่ยง",
-                                data: Object.values(groupedData).map(
-                                  (districts) => {
-                                    return Object.values(districts).reduce(
-                                      (total, subdistricts) => {
-                                        return (
-                                          total +
-                                          Object.values(subdistricts).reduce(
-                                            (subTotal, villages) => {
-                                              return (
-                                                subTotal +
-                                                villages.reduce(
-                                                  (villageTotal, village) =>
-                                                    villageTotal + village.risk,
-                                                  0
-                                                )
-                                              );
-                                            },
-                                            0
-                                          )
-                                        );
-                                      },
-                                      0
-                                    );
-                                  }
-                                ),
-                                borderColor: "hsl(var(--warning))",
-                                backgroundColor: "hsla(var(--warning), 0.1)",
-                                tension: 0.4,
-                              },
-                              {
-                                label: "ป่วย",
-                                data: Object.values(groupedData).map(
-                                  (districts) => {
-                                    return Object.values(districts).reduce(
-                                      (total, subdistricts) => {
-                                        return (
-                                          total +
-                                          Object.values(subdistricts).reduce(
-                                            (subTotal, villages) => {
-                                              return (
-                                                subTotal +
-                                                villages.reduce(
-                                                  (villageTotal, village) =>
-                                                    villageTotal + village.sick,
-                                                  0
-                                                )
-                                              );
-                                            },
-                                            0
-                                          )
-                                        );
-                                      },
-                                      0
-                                    );
-                                  }
-                                ),
-                                borderColor: "hsl(var(--destructive))",
-                                backgroundColor: "hsla(var(--destructive), 0.1)",
-                                tension: 0.4,
-                              },
-                            ],
-                          }}
-                        />
-                      ) : (
-                        <div className="flex h-full items-center justify-center">
-                           <p className="text-sm text-muted-foreground">
-                            ต้องมีข้อมูลหลายช่วงเวลาเพื่อแสดงแนวโน้ม
-                          </p>
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                </section>
-
-                <Separator />
-                
-                {/* 3. Area Situation */}
-                <section>
-                  <Card className="h-full">
+              <section>
+                <Card className="h-full">
                   <CardHeader className="pb-4 space-y-1">
                     <CardTitle className="flex flex-col gap-1">
                       <span className="flex items-center gap-2">
