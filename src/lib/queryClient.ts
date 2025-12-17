@@ -9,7 +9,7 @@ export const queryClient = new QueryClient({
       staleTime: 0, // Always fetch fresh data (Realtime)
       gcTime: FIVE_MINUTES, // Keep unused data in memory for instant feedback later
       retry: 1,
-      refetchOnWindowFocus: true, // Update when user comes back to tab
+      refetchOnWindowFocus: false, // Stop annoying reloads on tab switch
       refetchOnReconnect: true,
     },
   },
