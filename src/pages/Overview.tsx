@@ -35,21 +35,13 @@ const iconMap = {
   sick: ActivitySquare,
 };
 
-const DASHBOARD_STALE_TIME = 60 * 1000;
-const DASHBOARD_GC_TIME = 5 * 60 * 1000;
-
 const Overview = () => {
   const dashboardQuery = useQuery({
     queryKey: ["dashboard", "overview", "general"],
     queryFn: ({ signal }) =>
-      googleSheetsApi.getDashboardData(
-        {
-          targetGroup: "general",
-        },
-        { signal }
-      ),
-    staleTime: DASHBOARD_STALE_TIME,
-    gcTime: DASHBOARD_GC_TIME,
+      googleSheetsApi.getDashboardData({
+        targetGroup: "general",
+      }),
   });
 
   const data = dashboardQuery.data;
@@ -156,11 +148,14 @@ const Overview = () => {
       return undefined;
     }
     return [...districts]
-      .map((district) => ({
-        name: district.name ?? district.id ?? "ไม่ระบุ",
-        ratio: district.total ? district.sick / district.total : 0,
-        sick: district.sick,
-      }))
+      .map((district) => {
+        const total = district.normal + district.risk + district.sick;
+        return {
+          name: district.name ?? district.id ?? "ไม่ระบุ",
+          ratio: total > 0 ? district.sick / total : 0,
+          sick: district.sick,
+        };
+      })
       .sort((a, b) => b.ratio - a.ratio)[0];
   }, [districts]);
 
@@ -281,7 +276,69 @@ const Overview = () => {
                 </CardHeader>
                 <CardContent>
                   {barChartData ? (
-                    <BarChart data={barChartData} />
+                    (() => {
+                      // Calculate total across all datasets for percentage base
+                      // This assumes we want % relative to grand total, similar to how 'shares' works
+                      // Or if it's a stacked bar, per column.
+                      // Based on "Current Status Proportion", it's likely simplified status counts.
+                      // Let's assume we want % of the specific bar's category if it's categorical,
+                      // or % of grand total if it's a breakdown.
+                      // Given "Normal, Risk, Sick", usually we want sum=100%.
+
+                      // 1. Clone data to avoid mutating original
+                      const percentData = JSON.parse(
+                        JSON.stringify(barChartData)
+                      ) as typeof barChartData;
+
+                      // 2. Calculate percentages
+                      // Strategy: For each index (column), sum the values of all datasets at that index.
+                      // Then divide each value by that column's sum (Stacked 100% logic)
+                      // OR: If it's a simple distribution, sum everything.
+                      // Let's look at the structure. Usually datasets are [Normal, Risk, Sick].
+                      // If so, labels might be "Current Period".
+                      // If labels are "Districts", then we want % within that district.
+                      const totalPerIndex = percentData.labels.map((_, i) =>
+                        percentData.datasets.reduce(
+                          (sum, dataset) => sum + (dataset.data[i] || 0),
+                          0
+                        )
+                      );
+
+                      percentData.datasets.forEach((dataset) => {
+                        dataset.data = dataset.data.map((val, i) => {
+                          const total = totalPerIndex[i];
+                          return total > 0 ? (val / total) * 100 : 0;
+                        });
+                      });
+
+                      const percentOptions = {
+                        scales: {
+                          y: {
+                            ticks: {
+                              callback: (value: number | string) =>
+                                `${Number(value).toFixed(0)}%`,
+                            },
+                            max: 100, // Ensure scale goes to 100 if stacked, or auto if not.
+                          },
+                        },
+                        plugins: {
+                          tooltip: {
+                            callbacks: {
+                              label: (context: any) => {
+                                const value = context.raw as number;
+                                return `${
+                                  context.dataset.label ?? ""
+                                }: ${value.toFixed(1)}%`;
+                              },
+                            },
+                          },
+                        },
+                      };
+
+                      return (
+                        <BarChart data={percentData} options={percentOptions} />
+                      );
+                    })()
                   ) : (
                     <p className="text-sm text-muted-foreground">
                       ไม่มีข้อมูลสำหรับแสดงกราฟนี้

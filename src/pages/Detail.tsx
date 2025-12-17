@@ -9,9 +9,10 @@ import {
   Users,
   UserCheck,
   AlertTriangle,
-  Award,
   Stethoscope,
-  TrendingUp,
+  Filter,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
@@ -100,26 +101,32 @@ const THAI_MONTH_LABELS = [
   "พฤศจิกายน",
   "ธันวาคม",
 ];
-const DETAIL_STALE_TIME = 60 * 1000;
-const DETAIL_GC_TIME = 5 * 60 * 1000;
+
 const RECORDS_PAGE_SIZE = 250;
 const MAX_BACKGROUND_PAGES = 50;
 
 const Detail = () => {
   const { user } = useAuth();
-  const [currentFilters, setCurrentFilters] = useState<DetailFilters>(initialFilters);
-  const [appliedFilters, setAppliedFilters] = useState<DetailFilters>(initialFilters);
+  const [currentFilters, setCurrentFilters] =
+    useState<DetailFilters>(initialFilters);
+  const [appliedFilters, setAppliedFilters] =
+    useState<DetailFilters>(initialFilters);
   const [recordsPage, setRecordsPage] = useState(1);
   const recordsLimit = 50;
   const [searchParams] = useSearchParams();
   const lastAppliedQueryRef = useRef<string | null>(null);
-  const [factorView, setFactorView] = useState<"absolute" | "percentage">("absolute");
+  const [factorView, setFactorView] = useState<"absolute" | "percentage">(
+    "absolute"
+  );
   const [locationSearchTerm, setLocationSearchTerm] = useState("");
   const [showReferMetrics, setShowReferMetrics] = useState(true);
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
 
   useEffect(() => {
     if (user?.role === "officer" && user.district) {
-      setCurrentFilters((prev) => (prev.district ? prev : { ...prev, district: user.district }));
+      setCurrentFilters((prev) =>
+        prev.district ? prev : { ...prev, district: user.district }
+      );
     }
   }, [user?.district, user?.role]);
 
@@ -150,7 +157,9 @@ const Detail = () => {
       return;
     }
 
-    const normalizedTargetGroup = targetGroupOptions.some((option) => option.value === targetGroupParam)
+    const normalizedTargetGroup = targetGroupOptions.some(
+      (option) => option.value === targetGroupParam
+    )
       ? (targetGroupParam as DetailFilters["targetGroup"])
       : initialFilters.targetGroup;
 
@@ -196,12 +205,12 @@ const Detail = () => {
           village: appliedFilters.village || undefined,
           moo: appliedFilters.moo || undefined,
           year: appliedFilters.year ? Number(appliedFilters.year) : undefined,
-          month: appliedFilters.month ? Number(appliedFilters.month) : undefined,
+          month: appliedFilters.month
+            ? Number(appliedFilters.month)
+            : undefined,
         },
         { signal }
       ),
-    staleTime: DETAIL_STALE_TIME,
-    gcTime: DETAIL_GC_TIME,
   });
 
   const data = detailQuery.data;
@@ -236,7 +245,13 @@ const Detail = () => {
       sick: toValidNumber(summary?.sick),
       total: toValidNumber(summary?.total),
     };
-  }, [adjustmentsSummary?.adjusted, summary?.normal, summary?.risk, summary?.sick, summary?.total]);
+  }, [
+    adjustmentsSummary?.adjusted,
+    summary?.normal,
+    summary?.risk,
+    summary?.sick,
+    summary?.total,
+  ]);
 
   const fallbackBaselineTotals = useMemo(() => {
     if (adjustmentsSummary?.baseline) {
@@ -253,7 +268,13 @@ const Detail = () => {
       sick: toValidNumber(summary?.sick),
       total: toValidNumber(summary?.total),
     };
-  }, [adjustmentsSummary?.baseline, summary?.normal, summary?.risk, summary?.sick, summary?.total]);
+  }, [
+    adjustmentsSummary?.baseline,
+    summary?.normal,
+    summary?.risk,
+    summary?.sick,
+    summary?.total,
+  ]);
 
   const fallbackDiffTotals = useMemo(() => {
     if (adjustmentsSummary?.diff) {
@@ -270,7 +291,11 @@ const Detail = () => {
       sick: fallbackAdjustedTotals.sick - fallbackBaselineTotals.sick,
       total: fallbackAdjustedTotals.total - fallbackBaselineTotals.total,
     };
-  }, [adjustmentsSummary?.diff, fallbackAdjustedTotals, fallbackBaselineTotals]);
+  }, [
+    adjustmentsSummary?.diff,
+    fallbackAdjustedTotals,
+    fallbackBaselineTotals,
+  ]);
 
   const recordsQuery = useQuery({
     enabled: !!appliedFilters,
@@ -295,14 +320,14 @@ const Detail = () => {
           village: appliedFilters.village || undefined,
           moo: appliedFilters.moo || undefined,
           year: appliedFilters.year ? Number(appliedFilters.year) : undefined,
-          month: appliedFilters.month ? Number(appliedFilters.month) : undefined,
+          month: appliedFilters.month
+            ? Number(appliedFilters.month)
+            : undefined,
           page: recordsPage,
           limit: recordsLimit,
         },
         { signal }
       ),
-    staleTime: DETAIL_STALE_TIME,
-    gcTime: DETAIL_GC_TIME,
   });
 
   useEffect(() => {
@@ -316,7 +341,9 @@ const Detail = () => {
   const isAvailabilityReady = Boolean(availability) || detailQuery.isError;
   const isSearchDisabled = !isAvailabilityReady || isSearching;
   const activeFilters = appliedFilters;
-  const selectedMooLabel = appliedFilters.moo ? `หมู่ที่ ${appliedFilters.moo}` : "";
+  const selectedMooLabel = appliedFilters.moo
+    ? `หมู่ที่ ${appliedFilters.moo}`
+    : "";
 
   useEffect(() => {
     if (!availability) {
@@ -333,7 +360,11 @@ const Detail = () => {
         changed = true;
       }
 
-      if (next.district && districts.length > 0 && !districts.includes(next.district)) {
+      if (
+        next.district &&
+        districts.length > 0 &&
+        !districts.includes(next.district)
+      ) {
         next.district = "";
         next.subdistrict = "";
         next.village = "";
@@ -341,7 +372,9 @@ const Detail = () => {
         changed = true;
       }
 
-      const availableYears = (availability.years ?? []).map((year) => String(year));
+      const availableYears = (availability.years ?? []).map((year) =>
+        String(year)
+      );
       if (next.year) {
         if (!availableYears.includes(next.year)) {
           next.year = "";
@@ -382,11 +415,7 @@ const Detail = () => {
 
   const mooOptions = useMemo(() => {
     const mapping = districtsQuery.data;
-    if (
-      !mapping ||
-      !currentFilters.district ||
-      !currentFilters.subdistrict
-    ) {
+    if (!mapping || !currentFilters.district || !currentFilters.subdistrict) {
       return [];
     }
 
@@ -483,7 +512,10 @@ const Detail = () => {
         return changed ? next : prev;
       }
 
-      if (prev.month && !monthOptions.some((option) => option.value === prev.month)) {
+      if (
+        prev.month &&
+        !monthOptions.some((option) => option.value === prev.month)
+      ) {
         next.month = "";
         changed = true;
       } else if (!prev.month && monthOptions.length === 1) {
@@ -599,21 +631,18 @@ const Detail = () => {
       return String(yearNumber);
     }
     const monthIndex = Math.max(1, Math.min(12, Math.trunc(monthNumber)));
-    const monthName =
-      THAI_MONTH_LABELS[monthIndex] ?? `เดือนที่ ${monthIndex}`;
+    const monthName = THAI_MONTH_LABELS[monthIndex] ?? `เดือนที่ ${monthIndex}`;
     return `${monthName} ${yearNumber}`;
   };
   const categorySummary = useMemo(() => {
     if (!data?.categories?.length) {
       return {
-        overview: null as
-          | {
-              total: number;
-              normal: number;
-              risk: number;
-              sick: number;
-            }
-          | null,
+        overview: null as {
+          total: number;
+          normal: number;
+          risk: number;
+          sick: number;
+        } | null,
         factors: [] as Array<{
           key?: string;
           name: string;
@@ -687,7 +716,9 @@ const Detail = () => {
       return paginatedRecords;
     }
 
-    const fallbackRecords = Array.isArray(data?.detailTable) ? data.detailTable : [];
+    const fallbackRecords = Array.isArray(data?.detailTable)
+      ? data.detailTable
+      : [];
     if (!fallbackRecords.length) {
       return [];
     }
@@ -698,15 +729,21 @@ const Detail = () => {
 
     return fallbackRecords.filter((row) => {
       const district = typeof row.district === "string" ? row.district : "";
-      const subdistrict = typeof row.subdistrict === "string" ? row.subdistrict : "";
+      const subdistrict =
+        typeof row.subdistrict === "string" ? row.subdistrict : "";
       const village = typeof row.village === "string" ? row.village : "";
       const moo = typeof row.moo === "string" ? row.moo : "";
-      const year = row.year !== undefined && row.year !== null ? String(row.year) : "";
-      const month = row.month !== undefined && row.month !== null ? String(row.month) : "";
+      const year =
+        row.year !== undefined && row.year !== null ? String(row.year) : "";
+      const month =
+        row.month !== undefined && row.month !== null ? String(row.month) : "";
 
       const normalize = (value: string) => value.trim().toLowerCase();
 
-      if (appliedFilters.district && normalize(district) !== normalize(appliedFilters.district)) {
+      if (
+        appliedFilters.district &&
+        normalize(district) !== normalize(appliedFilters.district)
+      ) {
         return false;
       }
       if (
@@ -715,10 +752,16 @@ const Detail = () => {
       ) {
         return false;
       }
-      if (appliedFilters.village && normalize(village) !== normalize(appliedFilters.village)) {
+      if (
+        appliedFilters.village &&
+        normalize(village) !== normalize(appliedFilters.village)
+      ) {
         return false;
       }
-      if (appliedFilters.moo && normalize(moo) !== normalize(appliedFilters.moo)) {
+      if (
+        appliedFilters.moo &&
+        normalize(moo) !== normalize(appliedFilters.moo)
+      ) {
         return false;
       }
       if (appliedFilters.year && year !== appliedFilters.year) {
@@ -738,25 +781,25 @@ const Detail = () => {
     const overviewMetrics =
       metrics.Overview ?? metrics.overview ?? metrics.Total ?? metrics.total;
 
-    const baselineMetrics = typedRow.baselineMetrics ?? (metrics as NcdMetrics | undefined);
-    const adjustedMetrics = typedRow.adjustedMetrics ?? (metrics as NcdMetrics | undefined);
+    const baselineMetrics =
+      typedRow.baselineMetrics ?? (metrics as NcdMetrics | undefined);
+    const adjustedMetrics =
+      typedRow.adjustedMetrics ?? (metrics as NcdMetrics | undefined);
     const adjustmentsMetrics = typedRow.adjustments ?? undefined;
 
     const baselineOverviewMetrics =
-      baselineMetrics?.Overview ??
-      baselineMetrics?.overview ??
-      overviewMetrics;
+      baselineMetrics?.Overview ?? baselineMetrics?.overview ?? overviewMetrics;
     const adjustedOverviewMetrics =
-      adjustedMetrics?.Overview ??
-      adjustedMetrics?.overview ??
-      overviewMetrics;
+      adjustedMetrics?.Overview ?? adjustedMetrics?.overview ?? overviewMetrics;
     const adjustmentsOverviewMetrics =
       adjustmentsMetrics?.Overview ??
       adjustmentsMetrics?.overview ??
       adjustmentsMetrics?.Total ??
       adjustmentsMetrics?.total;
 
-    const fallbackNormal = toValidNumber(typedRow.normal ?? overviewMetrics?.normal);
+    const fallbackNormal = toValidNumber(
+      typedRow.normal ?? overviewMetrics?.normal
+    );
     const fallbackRisk = toValidNumber(typedRow.risk ?? overviewMetrics?.risk);
     const fallbackSick = toValidNumber(typedRow.sick ?? overviewMetrics?.sick);
 
@@ -781,15 +824,18 @@ const Detail = () => {
     );
 
     const diffNormalRaw =
-      adjustmentsOverviewMetrics && adjustmentsOverviewMetrics.normal !== undefined
+      adjustmentsOverviewMetrics &&
+      adjustmentsOverviewMetrics.normal !== undefined
         ? toValidNumber(adjustmentsOverviewMetrics.normal)
         : adjustedNormalRaw - baselineNormalRaw;
     const diffRiskRaw =
-      adjustmentsOverviewMetrics && adjustmentsOverviewMetrics.risk !== undefined
+      adjustmentsOverviewMetrics &&
+      adjustmentsOverviewMetrics.risk !== undefined
         ? toValidNumber(adjustmentsOverviewMetrics.risk)
         : adjustedRiskRaw - baselineRiskRaw;
     const diffSickRaw =
-      adjustmentsOverviewMetrics && adjustmentsOverviewMetrics.sick !== undefined
+      adjustmentsOverviewMetrics &&
+      adjustmentsOverviewMetrics.sick !== undefined
         ? toValidNumber(adjustmentsOverviewMetrics.sick)
         : adjustedSickRaw - baselineSickRaw;
 
@@ -819,12 +865,14 @@ const Detail = () => {
     const period =
       (typeof typedRow.period === "string" && typedRow.period
         ? typedRow.period
-        : typeof (typedRow as { periodLabel?: string }).periodLabel === "string" &&
-          (typedRow as { periodLabel?: string }).periodLabel
+        : typeof (typedRow as { periodLabel?: string }).periodLabel ===
+            "string" && (typedRow as { periodLabel?: string }).periodLabel
         ? (typedRow as { periodLabel?: string }).periodLabel
         : getPeriodLabel(typedRow.year, typedRow.month)) ?? undefined;
     const hasExplicitTotal =
-      typedRow.total !== undefined && typedRow.total !== null && typedRow.total !== "";
+      typedRow.total !== undefined &&
+      typedRow.total !== null &&
+      typedRow.total !== "";
     const total = hasExplicitTotal
       ? clampNonNegative(toValidNumber(typedRow.total))
       : adjustedTotal;
@@ -899,8 +947,10 @@ const Detail = () => {
     );
   }, [detailRows]);
 
-  const adjustedTotals = detailAdjustmentSummary?.adjusted ?? fallbackAdjustedTotals;
-  const baselineTotals = detailAdjustmentSummary?.baseline ?? fallbackBaselineTotals;
+  const adjustedTotals =
+    detailAdjustmentSummary?.adjusted ?? fallbackAdjustedTotals;
+  const baselineTotals =
+    detailAdjustmentSummary?.baseline ?? fallbackBaselineTotals;
   const diffTotals = detailAdjustmentSummary?.diff ?? fallbackDiffTotals;
 
   const overviewTotals = useMemo(() => {
@@ -913,10 +963,17 @@ const Detail = () => {
     }
 
     return fallbackAdjustedTotals;
-  }, [categorySummary.overview, detailAdjustmentSummary, fallbackAdjustedTotals]);
+  }, [
+    categorySummary.overview,
+    detailAdjustmentSummary,
+    fallbackAdjustedTotals,
+  ]);
 
   const groupedData = useMemo(() => {
-    const periods: Record<string, Record<string, Record<string, typeof detailRows>>> = {};
+    const periods: Record<
+      string,
+      Record<string, Record<string, typeof detailRows>>
+    > = {};
 
     detailRows.forEach((row) => {
       const periodKey = row.period || "ไม่ระบุช่วงเวลา";
@@ -953,14 +1010,21 @@ const Detail = () => {
       return "";
     };
 
-    const result: Record<string, Record<string, Record<string, typeof detailRows>>> = {};
+    const result: Record<
+      string,
+      Record<string, Record<string, typeof detailRows>>
+    > = {};
 
     Object.entries(groupedData).forEach(([periodKey, districts]) => {
       const periodMatch = normalizeText(periodKey).includes(term);
-      const nextDistricts: Record<string, Record<string, typeof detailRows>> = {};
+      const nextDistricts: Record<
+        string,
+        Record<string, typeof detailRows>
+      > = {};
 
       Object.entries(districts).forEach(([districtKey, subdistricts]) => {
-        const districtMatch = periodMatch || normalizeText(districtKey).includes(term);
+        const districtMatch =
+          periodMatch || normalizeText(districtKey).includes(term);
         const nextSubdistricts: Record<string, typeof detailRows> = {};
 
         Object.entries(subdistricts).forEach(([subdistrictKey, villages]) => {
@@ -1003,7 +1067,7 @@ const Detail = () => {
   const totalPeople = adjustedTotals.total;
   const totalRefer = useMemo(
     () => detailRows.reduce((acc, row) => acc + (row.referCount ?? 0), 0),
-    [detailRows],
+    [detailRows]
   );
 
   const locationAggregates = useMemo(() => {
@@ -1022,7 +1086,9 @@ const Detail = () => {
     >();
 
     detailRows.forEach((row) => {
-      const key = `${row.district || ""}|${row.subdistrict || ""}|${row.village || ""}`;
+      const key = `${row.district || ""}|${row.subdistrict || ""}|${
+        row.village || ""
+      }`;
       const existing = map.get(key) ?? {
         district: row.district || "ไม่ระบุ",
         subdistrict: row.subdistrict || "ไม่ระบุ",
@@ -1047,7 +1113,10 @@ const Detail = () => {
   }, [detailRows]);
 
   const districtSummaries = useMemo(() => {
-    const map = new Map<string, { name: string; risk: number; sick: number; total: number }>();
+    const map = new Map<
+      string,
+      { name: string; risk: number; sick: number; total: number }
+    >();
 
     detailRows.forEach((row) => {
       const name = row.district || "ไม่ระบุอำเภอ";
@@ -1066,12 +1135,15 @@ const Detail = () => {
       return undefined;
     }
 
-    return districtSummaries.reduce<{ name: string; risk: number } | undefined>((acc, item) => {
-      if (!acc || item.risk > acc.risk) {
-        return { name: item.name, risk: item.risk };
-      }
-      return acc;
-    }, undefined);
+    return districtSummaries.reduce<{ name: string; risk: number } | undefined>(
+      (acc, item) => {
+        if (!acc || item.risk > acc.risk) {
+          return { name: item.name, risk: item.risk };
+        }
+        return acc;
+      },
+      undefined
+    );
   }, [districtSummaries]);
 
   const highestSickRatioDistrict = useMemo(() => {
@@ -1125,72 +1197,12 @@ const Detail = () => {
 
   const referLocations = useMemo(
     () => locationAggregates.filter((item) => item.refer > 0),
-    [locationAggregates],
+    [locationAggregates]
   );
 
-  const averageRefer = referLocations.length ? totalRefer / referLocations.length : 0;
-
-  const significantChanges = useMemo(() => {
-    if (!summary || !data?.lineChart || data.lineChart.labels.length < 2) {
-      return [];
-    }
-
-    const datasets = data.lineChart.datasets ?? [];
-    const normalDataset = datasets.find((item) => item.label === "ปกติ");
-    const riskDataset = datasets.find((item) => item.label === "เสี่ยง");
-    const sickDataset = datasets.find((item) => item.label === "ป่วย");
-
-    const normalValues = Array.isArray(normalDataset?.data) ? normalDataset?.data : [];
-    const riskValues = Array.isArray(riskDataset?.data) ? riskDataset?.data : [];
-    const sickValues = Array.isArray(sickDataset?.data) ? sickDataset?.data : [];
-
-    const previousRisk = Number(riskValues[riskValues.length - 2] ?? 0);
-    const latestRisk = Number(riskValues[riskValues.length - 1] ?? 0);
-    const previousSick = Number(sickValues[sickValues.length - 2] ?? 0);
-    const latestSick = Number(sickValues[sickValues.length - 1] ?? 0);
-
-    const percentChange = (latest: number, previous: number) => {
-      if (previous <= 0) {
-        return latest > 0 ? 100 : 0;
-      }
-      return ((latest - previous) / previous) * 100;
-    };
-
-    const insights: Array<{ title: string; description: string; variant: "warning" | "destructive" | "success" }> = [];
-
-    const riskPercentChange = percentChange(latestRisk, previousRisk);
-    const sickPercentChange = percentChange(latestSick, previousSick);
-    const riskAbsoluteChange = Math.round(latestRisk - previousRisk);
-    const sickAbsoluteChange = Math.round(latestSick - previousSick);
-
-    const formatChangeDetail = (diff: number) => {
-      if (diff === 0) {
-        return "เทียบเดือนก่อนเท่าเดิม";
-      }
-      const direction = diff > 0 ? "เพิ่มขึ้น" : "ลดลง";
-      return `${direction} ${Math.abs(diff).toLocaleString()} คนจากเดือนก่อน`;
-    };
-
-    if (riskPercentChange >= 20) {
-      insights.push({
-        title: "ความเสี่ยงเพิ่มสูง",
-        description: formatChangeDetail(riskAbsoluteChange),
-        variant: "warning",
-      });
-    }
-
-    if (!insights.length && riskPercentChange <= -10 && sickPercentChange <= -10) {
-      const riskDecreaseText = `เสี่ยงลดลง ${Math.abs(riskAbsoluteChange).toLocaleString()} คน`;
-      const sickDecreaseText = `ป่วยลดลง ${Math.abs(sickAbsoluteChange).toLocaleString()} คน`;
-      insights.push({
-        title: "แนวโน้มดีขึ้น",
-        description: `${riskDecreaseText} · ${sickDecreaseText} (เทียบเดือนก่อน)`,
-        variant: "success",
-      });
-    }
-
-    return insights;
-  }, [data?.lineChart, summary]);
+  const averageRefer = referLocations.length
+    ? totalRefer / referLocations.length
+    : 0;
 
   const selectedPeriodLabel = useMemo(() => {
     if (!appliedFilters) {
@@ -1213,7 +1225,12 @@ const Detail = () => {
   }, [appliedFilters, data?.metadata?.period]);
 
   const formatLocation = useCallback(
-    (entry?: { village?: string; subdistrict?: string; district?: string; moo?: string }) => {
+    (entry?: {
+      village?: string;
+      subdistrict?: string;
+      district?: string;
+      moo?: string;
+    }) => {
       if (!entry) {
         return "ไม่พบข้อมูล";
       }
@@ -1285,7 +1302,7 @@ const Detail = () => {
       key: T,
       title: string,
       icon: typeof Users,
-      variant: "default" | "success" | "warning" | "destructive",
+      variant: "default" | "success" | "warning" | "destructive"
     ) => {
       const value = totals[key];
       return {
@@ -1316,94 +1333,19 @@ const Detail = () => {
         : "ไม่มีข้อมูล",
       icon: Stethoscope,
       variant: "default" as const,
+      baseline: 0,
+      diff: 0,
     });
 
     return stats;
-  }, [adjustedTotals, baselineTotals, diffTotals, referLocations.length, totalRefer]);
-
-  const locationInsights = useMemo(() => {
-    if (!appliedFilters || !summary) {
-      return [];
-    }
-    const insights: Array<{ title: string; description: string }> = [];
-    insights.push({
-      title: "ช่วงเวลาที่แสดงผล",
-      description: `${selectedPeriodLabel} รวม ${totalPeople.toLocaleString()} คน`,
-    });
-
-    if (highestRiskEntry) {
-      insights.push({
-        title: "พื้นที่ที่มีจำนวนกลุ่มเสี่ยงสูง",
-        description: `${formatLocation(highestRiskEntry)} เสี่ยง ${highestRiskEntry.risk.toLocaleString()} คน`,
-      });
-    }
-
-    if (highestRiskRatioEntry && highestRiskRatioEntry.total > 0) {
-      insights.push({
-        title: "อัตราความเสี่ยงสูงสุด",
-        description: `${formatLocation(highestRiskRatioEntry)} คิดเป็น ${(
-          (highestRiskRatioEntry.risk / highestRiskRatioEntry.total) *
-          100
-        ).toFixed(1)}% ของพื้นที่นั้น`,
-      });
-    }
-
-    if (highestSickEntry && highestSickEntry.sick > 0) {
-      insights.push({
-        title: "พื้นที่ที่พบผู้ป่วยมากที่สุด",
-        description: `${formatLocation(highestSickEntry)} ป่วย ${highestSickEntry.sick.toLocaleString()} คน`,
-      });
-    }
-
-    if (totalRefer > 0) {
-      insights.push({
-        title: "การส่งต่อผู้ป่วย",
-        description: `ส่งต่อ ${totalRefer.toLocaleString()} ครั้ง · เฉลี่ย ${averageRefer.toFixed(1)} ครั้ง/พื้นที่`,
-      });
-    }
-
-    return insights.slice(0, 4);
   }, [
-    appliedFilters,
-    averageRefer,
-    highestRiskEntry,
-    highestRiskRatioEntry,
-    highestSickEntry,
-    selectedPeriodLabel,
-    formatLocation,
-    summary,
-    totalPeople,
+    adjustedTotals,
+    baselineTotals,
+    diffTotals,
+    referLocations.length,
     totalRefer,
   ]);
 
-  const quickHighlights = useMemo(() => {
-    const items: Array<{
-      id: string;
-      title: string;
-      detail: string;
-      tone: "muted" | "success" | "warning" | "destructive";
-    }> = [];
-
-    significantChanges.forEach((item, index) => {
-      items.push({
-        id: `change-${index}`,
-        title: item.title,
-        detail: item.description,
-        tone: item.variant,
-      });
-    });
-
-    locationInsights.forEach((insight, index) => {
-      items.push({
-        id: `insight-${index}`,
-        title: insight.title,
-        detail: insight.description,
-        tone: "muted",
-      });
-    });
-
-    return items.slice(0, 6);
-  }, [locationInsights, significantChanges]);
   const renderFactorGrid = (mode: "absolute" | "percentage") => {
     const isPercentage = mode === "percentage";
     const formatValue = (value: number, base: number) => {
@@ -1467,7 +1409,10 @@ const Detail = () => {
                   <div>
                     <p className="text-muted-foreground">ปกติ</p>
                     <p className="font-medium text-success">
-                      {formatValue(toValidNumber(category.normal), categoryTotal)}
+                      {formatValue(
+                        toValidNumber(category.normal),
+                        categoryTotal
+                      )}
                     </p>
                   </div>
                   <div>
@@ -1500,9 +1445,11 @@ const Detail = () => {
         )
       : 1;
   const isRecordsInitialLoading =
-    recordsQuery.fetchStatus === "fetching" && recordsQuery.status === "pending";
+    recordsQuery.fetchStatus === "fetching" &&
+    recordsQuery.status === "pending";
   const isRecordsRefreshing =
-    recordsQuery.fetchStatus === "fetching" && recordsQuery.status !== "pending";
+    recordsQuery.fetchStatus === "fetching" &&
+    recordsQuery.status !== "pending";
 
   const donutData = useMemo(() => {
     if (!adjustedTotals.total) {
@@ -1512,7 +1459,11 @@ const Detail = () => {
       labels: ["ปกติ", "เสี่ยง", "ป่วย"],
       datasets: [
         {
-          data: [adjustedTotals.normal, adjustedTotals.risk, adjustedTotals.sick],
+          data: [
+            adjustedTotals.normal,
+            adjustedTotals.risk,
+            adjustedTotals.sick,
+          ],
           backgroundColor: [
             "hsl(var(--success))",
             "hsl(var(--warning))",
@@ -1532,7 +1483,14 @@ const Detail = () => {
       ...prev,
       [key]: value,
       ...(key === "targetGroup"
-        ? { district: "", subdistrict: "", village: "", moo: "", year: "", month: "" }
+        ? {
+            district: "",
+            subdistrict: "",
+            village: "",
+            moo: "",
+            year: "",
+            month: "",
+          }
         : {}),
       ...(key === "district" ? { subdistrict: "", village: "", moo: "" } : {}),
       ...(key === "subdistrict" ? { village: "", moo: "" } : {}),
@@ -1550,12 +1508,16 @@ const Detail = () => {
     <div className="min-h-screen bg-background">
       <Navigation />
 
-      <main className="container mx-auto px-4 py-8 space-y-8">
-        <header className="space-y-2">
-          <h2 className="text-3xl md:text-4xl font-bold">รายละเอียดข้อมูลอำเภอ</h2>
-          <p className="text-muted-foreground">
-            วิเคราะห์ข้อมูลเชิงลึกแยกตามพื้นที่และช่วงเวลา
-          </p>
+      <main className="container mx-auto px-4 py-8 space-y-6">
+        <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <h2 className="text-3xl md:text-4xl font-bold">
+              รายละเอียดข้อมูลอำเภอ
+            </h2>
+            <p className="text-muted-foreground">
+              วิเคราะห์ข้อมูลเชิงลึกแยกตามพื้นที่และช่วงเวลา
+            </p>
+          </div>
         </header>
 
         {isError && (
@@ -1566,523 +1528,510 @@ const Detail = () => {
           </Card>
         )}
 
+        {/* Collapsible Filters */}
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg font-semibold">
-              <Search className="w-4 h-4" />
-              ตัวกรองข้อมูล
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div>
-              <span className="text-sm font-medium flex items-center gap-2">
-                <Target className="w-4 h-4 text-primary" />
-                กลุ่มเป้าหมาย
-              </span>
-              <Select
-                value={currentFilters.targetGroup}
-                onValueChange={(value) =>
-                  handleCurrentFilterChange("targetGroup", value)
-                }
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+                <Filter className="w-5 h-5" />
+                ตัวกรองข้อมูล
+              </CardTitle>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setIsFilterOpen(!isFilterOpen)}
+                className="text-muted-foreground hover:text-foreground"
               >
-                <SelectTrigger className="mt-2">
-                  <SelectValue placeholder="เลือกกลุ่มเป้าหมาย" />
-                </SelectTrigger>
-                <SelectContent>
-                  {targetGroupOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div>
-              <span className="text-sm font-medium flex items-center gap-2">
-                <Layers className="w-4 h-4 text-primary" />
-                อำเภอ
-              </span>
-              <Select
-                value={currentFilters.district || ALL_DISTRICT_VALUE}
-                onValueChange={(value) =>
-                  handleCurrentFilterChange(
-                    "district",
-                    value === ALL_DISTRICT_VALUE ? "" : value
-                  )
-                }
-                disabled={
-                  user?.role === "officer" || !availability?.districts?.length
-                }
-              >
-                <SelectTrigger className="mt-2">
-                  <SelectValue placeholder="เลือกอำเภอ" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={ALL_DISTRICT_VALUE}>ทั้งหมด</SelectItem>
-                  {availability?.districts.map((district) => (
-                    <SelectItem key={district} value={district}>
-                      {district}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div>
-              <span className="text-sm font-medium flex items-center gap-2">
-                <MapPin className="w-4 h-4 text-primary" />
-                ตำบล
-              </span>
-              <Select
-                value={currentFilters.subdistrict || ALL_SUBDISTRICT_VALUE}
-                onValueChange={(value) =>
-                  handleCurrentFilterChange(
-                    "subdistrict",
-                    value === ALL_SUBDISTRICT_VALUE ? "" : value
-                  )
-                }
-                disabled={!subdistrictOptions.length}
-              >
-                <SelectTrigger className="mt-2">
-                  <SelectValue placeholder="เลือกตำบล" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={ALL_SUBDISTRICT_VALUE}>ทั้งหมด</SelectItem>
-                  {subdistrictOptions.map((subdistrict) => (
-                    <SelectItem key={subdistrict} value={subdistrict}>
-                      {subdistrict}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div>
-              <span className="text-sm font-medium flex items-center gap-2">
-                <MapPin className="w-4 h-4 text-primary" />
-                หมู่บ้าน
-              </span>
-              <Select
-                value={currentFilters.village || ALL_VILLAGE_VALUE}
-                onValueChange={(value) =>
-                  handleCurrentFilterChange(
-                    "village",
-                    value === ALL_VILLAGE_VALUE ? "" : value
-                  )
-                }
-                disabled={!villageOptions.length}
-              >
-                <SelectTrigger className="mt-2">
-                  <SelectValue placeholder="เลือกหมู่บ้าน" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={ALL_VILLAGE_VALUE}>ทั้งหมด</SelectItem>
-                  {villageOptions.map((village) => (
-                    <SelectItem key={village} value={village}>
-                      {village}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div>
-              <span className="text-sm font-medium flex items-center gap-2">
-                <MapPin className="w-4 h-4 text-primary" />
-                หมู่ที่
-              </span>
-              <Select
-                value={currentFilters.moo || ALL_MOO_VALUE}
-                onValueChange={(value) =>
-                  handleCurrentFilterChange(
-                    "moo",
-                    value === ALL_MOO_VALUE ? "" : value
-                  )
-                }
-                disabled={!mooOptions.length}
-              >
-                <SelectTrigger className="mt-2">
-                  <SelectValue placeholder="เลือกหมู่" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={ALL_MOO_VALUE}>ทั้งหมด</SelectItem>
-                  {mooOptions.map((moo) => (
-                    <SelectItem key={moo} value={moo}>
-                      {moo.toLowerCase().startsWith("หมู่") ? moo : `หมู่ที่ ${moo}`}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div>
-              <span className="text-sm font-medium flex items-center gap-2">
-                <ActivitySquare className="w-4 h-4 text-primary" />
-                ปี
-              </span>
-              <Select
-                value={currentFilters.year || ALL_YEAR_VALUE}
-                onValueChange={(value) =>
-                  handleCurrentFilterChange(
-                    "year",
-                    value === ALL_YEAR_VALUE ? "" : value
-                  )
-                }
-                disabled={!availability?.years?.length}
-              >
-                <SelectTrigger className="mt-2">
-                  <SelectValue placeholder="เลือกปี" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={ALL_YEAR_VALUE}>ทั้งหมด</SelectItem>
-                  {availability?.years.map((year) => (
-                    <SelectItem key={year} value={String(year)}>
-                      {year}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div>
-              <span className="text-sm font-medium flex items-center gap-2">
-                <ActivitySquare className="w-4 h-4 text-primary" />
-                เดือน
-              </span>
-              <Select
-                value={currentFilters.month || ALL_MONTH_VALUE}
-                onValueChange={(value) =>
-                  handleCurrentFilterChange(
-                    "month",
-                    value === ALL_MONTH_VALUE ? "" : value
-                  )
-                }
-                disabled={!currentFilters.year || !monthOptions.length}
-              >
-                <SelectTrigger className="mt-2">
-                  <SelectValue placeholder="เลือกเดือน" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={ALL_MONTH_VALUE}>ทั้งหมด</SelectItem>
-                  {monthOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div className="flex justify-center md:justify-end">
-              <Button onClick={handleSearch} className="gap-2" disabled={isSearchDisabled}>
-                <Search className="w-4 h-4" />
-                ค้นหาข้อมูล
+                {isFilterOpen ? (
+                  <>
+                    <ChevronUp className="w-4 h-4 mr-2" />
+                    ซ่อนตัวกรอง
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="w-4 h-4 mr-2" />
+                    แสดงตัวกรอง
+                  </>
+                )}
               </Button>
             </div>
+            {!isFilterOpen && appliedFilters && (
+               <div className="flex flex-wrap items-center gap-2 mt-2 text-sm text-muted-foreground">
+                  <Badge variant="secondary" className="font-normal">
+                    {activeFilters.targetGroup === "monk" ? "พระสงฆ์" : "บุคคลทั่วไป"}
+                  </Badge>
+                  {activeFilters.district && (
+                    <Badge variant="outline" className="font-normal">
+                      อำเภอ: {activeFilters.district}
+                    </Badge>
+                  )}
+                  {activeFilters.subdistrict && (
+                     <Badge variant="outline" className="font-normal">
+                      ตำบล: {activeFilters.subdistrict}
+                    </Badge>
+                  )}
+                  {activeFilters.village && (
+                     <Badge variant="outline" className="font-normal">
+                      หมู่บ้าน: {activeFilters.village}
+                    </Badge>
+                  )}
+                  {activeFilters.year && (
+                     <Badge variant="outline" className="font-normal">
+                      {selectedPeriodLabel}
+                    </Badge>
+                  )}
+               </div>
+            )}
+          </CardHeader>
+          {isFilterOpen && (
+            <CardContent className="space-y-6 animate-in slide-in-from-top-2 duration-200">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div>
+                  <span className="text-sm font-medium flex items-center gap-2">
+                    <Target className="w-4 h-4 text-primary" />
+                    กลุ่มเป้าหมาย
+                  </span>
+                  <Select
+                    value={currentFilters.targetGroup}
+                    onValueChange={(value) =>
+                      handleCurrentFilterChange("targetGroup", value)
+                    }
+                  >
+                    <SelectTrigger className="mt-2">
+                      <SelectValue placeholder="เลือกกลุ่มเป้าหมาย" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {targetGroupOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
-          </CardContent>
+                <div>
+                  <span className="text-sm font-medium flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-primary" />
+                    อำเภอ
+                  </span>
+                  <Select
+                    value={currentFilters.district || ALL_DISTRICT_VALUE}
+                    onValueChange={(value) =>
+                      handleCurrentFilterChange(
+                        "district",
+                        value === ALL_DISTRICT_VALUE ? "" : value
+                      )
+                    }
+                    disabled={
+                      user?.role === "officer" || !availability?.districts?.length
+                    }
+                  >
+                    <SelectTrigger className="mt-2">
+                      <SelectValue placeholder="เลือกอำเภอ" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ALL_DISTRICT_VALUE}>ทั้งหมด</SelectItem>
+                      {availability?.districts.map((district) => (
+                        <SelectItem key={district} value={district}>
+                          {district}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <span className="text-sm font-medium flex items-center gap-2">
+                    <MapPin className="w-4 h-4 text-primary" />
+                    ตำบล
+                  </span>
+                  <Select
+                    value={currentFilters.subdistrict || ALL_SUBDISTRICT_VALUE}
+                    onValueChange={(value) =>
+                      handleCurrentFilterChange(
+                        "subdistrict",
+                        value === ALL_SUBDISTRICT_VALUE ? "" : value
+                      )
+                    }
+                    disabled={!subdistrictOptions.length}
+                  >
+                    <SelectTrigger className="mt-2">
+                      <SelectValue placeholder="เลือกตำบล" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ALL_SUBDISTRICT_VALUE}>
+                        ทั้งหมด
+                      </SelectItem>
+                      {subdistrictOptions.map((subdistrict) => (
+                        <SelectItem key={subdistrict} value={subdistrict}>
+                          {subdistrict}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <span className="text-sm font-medium flex items-center gap-2">
+                    <MapPin className="w-4 h-4 text-primary" />
+                    หมู่บ้าน
+                  </span>
+                  <Select
+                    value={currentFilters.village || ALL_VILLAGE_VALUE}
+                    onValueChange={(value) =>
+                      handleCurrentFilterChange(
+                        "village",
+                        value === ALL_VILLAGE_VALUE ? "" : value
+                      )
+                    }
+                    disabled={!villageOptions.length}
+                  >
+                    <SelectTrigger className="mt-2">
+                      <SelectValue placeholder="เลือกหมู่บ้าน" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ALL_VILLAGE_VALUE}>ทั้งหมด</SelectItem>
+                      {villageOptions.map((village) => (
+                        <SelectItem key={village} value={village}>
+                          {village}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <span className="text-sm font-medium flex items-center gap-2">
+                    <MapPin className="w-4 h-4 text-primary" />
+                    หมู่ที่
+                  </span>
+                  <Select
+                    value={currentFilters.moo || ALL_MOO_VALUE}
+                    onValueChange={(value) =>
+                      handleCurrentFilterChange(
+                        "moo",
+                        value === ALL_MOO_VALUE ? "" : value
+                      )
+                    }
+                    disabled={!mooOptions.length}
+                  >
+                    <SelectTrigger className="mt-2">
+                      <SelectValue placeholder="เลือกหมู่" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ALL_MOO_VALUE}>ทั้งหมด</SelectItem>
+                      {mooOptions.map((moo) => (
+                        <SelectItem key={moo} value={moo}>
+                          {moo.toLowerCase().startsWith("หมู่")
+                            ? moo
+                            : `หมู่ที่ ${moo}`}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <span className="text-sm font-medium flex items-center gap-2">
+                    <ActivitySquare className="w-4 h-4 text-primary" />
+                    ปี
+                  </span>
+                  <Select
+                    value={currentFilters.year || ALL_YEAR_VALUE}
+                    onValueChange={(value) =>
+                      handleCurrentFilterChange(
+                        "year",
+                        value === ALL_YEAR_VALUE ? "" : value
+                      )
+                    }
+                    disabled={!availability?.years?.length}
+                  >
+                    <SelectTrigger className="mt-2">
+                      <SelectValue placeholder="เลือกปี" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ALL_YEAR_VALUE}>ทั้งหมด</SelectItem>
+                      {availability?.years.map((year) => (
+                        <SelectItem key={year} value={String(year)}>
+                          {year}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <span className="text-sm font-medium flex items-center gap-2">
+                    <ActivitySquare className="w-4 h-4 text-primary" />
+                    เดือน
+                  </span>
+                  <Select
+                    value={currentFilters.month || ALL_MONTH_VALUE}
+                    onValueChange={(value) =>
+                      handleCurrentFilterChange(
+                        "month",
+                        value === ALL_MONTH_VALUE ? "" : value
+                      )
+                    }
+                    disabled={!currentFilters.year || !monthOptions.length}
+                  >
+                    <SelectTrigger className="mt-2">
+                      <SelectValue placeholder="เลือกเดือน" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ALL_MONTH_VALUE}>ทั้งหมด</SelectItem>
+                      {monthOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="flex justify-center md:justify-end border-t pt-4">
+                <Button
+                  onClick={() => {
+                     handleSearch();
+                     setIsFilterOpen(false); // Auto close on search for better UX
+                  }}
+                  className="gap-2 w-full md:w-auto"
+                  disabled={isSearchDisabled}
+                >
+                  <Search className="w-4 h-4" />
+                  ค้นหาข้อมูล
+                </Button>
+              </div>
+            </CardContent>
+          )}
         </Card>
 
         {!appliedFilters ? (
           <Card>
             <CardContent className="py-10 text-center text-sm text-muted-foreground">
-              กรุณาเลือกตัวกรองที่ต้องการแล้วกดปุ่ม "ค้นหาข้อมูล" เพื่อแสดงรายละเอียด
+              กรุณาเลือกตัวกรองที่ต้องการแล้วกดปุ่ม "ค้นหาข้อมูล"
+              เพื่อแสดงรายละเอียด
             </CardContent>
           </Card>
         ) : showInitialLoading ? (
           <LoadingState message="กำลังโหลดข้อมูลรายละเอียด..." />
         ) : (
           <>
-            <section className="space-y-3">
-              <div className="flex flex-wrap items-center gap-3">
-                <Badge variant="outline">
-                  ช่วงเวลา: {selectedPeriodLabel || "ไม่ระบุ"}
-                </Badge>
-                {activeFilters?.district && (
-                  <Badge variant="outline">อำเภอ: {activeFilters.district}</Badge>
-                )}
-                {activeFilters?.subdistrict && (
-                  <Badge variant="outline">ตำบล: {activeFilters.subdistrict}</Badge>
-                )}
-                {activeFilters?.village && (
-                  <Badge variant="outline">หมู่บ้าน: {activeFilters.village}</Badge>
-                )}
-                {activeFilters?.moo && (
-                  <Badge variant="outline">หมู่ที่: {activeFilters.moo}</Badge>
-                )}
-              </div>
+            {summary ? (
+              <>
+                {/* 1. Metric Stats (Top Priority) */}
+                <section className="space-y-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+                    {detailStats.map((stat) => {
+                      const details: Array<{
+                        label: string;
+                        value: string;
+                        tone?:
+                          | "default"
+                          | "muted"
+                          | "success"
+                          | "warning"
+                          | "destructive";
+                      }> = [];
 
-              {summary ? (
-                <>
-                  <section className="space-y-6">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
-                      {detailStats.map((stat) => {
-                        const details: Array<{
-                          label: string;
-                          value: string;
-                          tone?: "default" | "muted" | "success" | "warning" | "destructive";
-                        }> = [];
+                      if (
+                        typeof stat.baseline === "number" &&
+                        Number.isFinite(stat.baseline) &&
+                        stat.key !== "refer"
+                      ) {
+                        details.push({
+                          label: "ก่อนปรับ",
+                          value: formatMetricWithUnit(stat.baseline),
+                          tone: "muted",
+                        });
+                      }
+                      if (
+                        typeof stat.diff === "number" &&
+                        Number.isFinite(stat.diff) &&
+                        stat.key !== "refer"
+                      ) {
+                        details.push({
+                          label: "เปลี่ยนแปลง",
+                          value: formatMetricDelta(stat.diff),
+                          tone: metricTone(
+                            stat.key as SummaryMetricKey,
+                            stat.diff
+                          ),
+                        });
+                      }
 
-                        if (
-                          typeof stat.baseline === "number" &&
-                          Number.isFinite(stat.baseline) &&
-                          stat.key !== "refer"
-                        ) {
-                          details.push({
-                            label: "ก่อนปรับ",
-                            value: formatMetricWithUnit(stat.baseline),
-                            tone: "muted",
-                          });
-                        }
-                        if (
-                          typeof stat.diff === "number" &&
-                          Number.isFinite(stat.diff) &&
-                          stat.key !== "refer"
-                        ) {
-                          details.push({
-                            label: "เปลี่ยนแปลง",
-                            value: formatMetricDelta(stat.diff),
-                            tone: metricTone(stat.key as SummaryMetricKey, stat.diff),
-                          });
-                        }
+                      return (
+                        <StatsCard
+                          key={stat.key}
+                          title={stat.title}
+                          value={stat.value}
+                          percentage={stat.percentage}
+                          icon={stat.icon}
+                          variant={stat.variant}
+                          details={details}
+                          delta={
+                            typeof stat.diff === "number" &&
+                            Number.isFinite(stat.diff) &&
+                            stat.key !== "refer"
+                              ? {
+                                  value: formatMetricDelta(stat.diff),
+                                  trend: metricTrend(stat.diff),
+                                  label: "เทียบก่อนปรับ",
+                                }
+                              : undefined
+                          }
+                        />
+                      );
+                    })}
+                  </div>
+                </section>
 
-                        return (
-                          <StatsCard
-                            key={stat.key}
-                            title={stat.title}
-                            value={stat.value}
-                            percentage={stat.percentage}
-                            icon={stat.icon}
-                            variant={stat.variant}
-                            details={details}
-                            delta={
-                              typeof stat.diff === "number" &&
-                              Number.isFinite(stat.diff) &&
-                              stat.key !== "refer"
-                                ? {
-                                    value: formatMetricDelta(stat.diff),
-                                    trend: metricTrend(stat.diff),
-                                    label: "เทียบก่อนปรับ",
+                <Separator />
+
+                 {/* 2. Charts Section */}
+                <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <Card className="h-full">
+                    <CardHeader>
+                      <CardTitle>สัดส่วนสถานะ</CardTitle>
+                      <CardDescription>ภาพรวมสัดส่วน ปกติ/เสี่ยง/ป่วย</CardDescription>
+                    </CardHeader>
+                    <CardContent className="flex items-center justify-center min-h-[300px]">
+                      {summary && donutData ? (
+                        <div className="w-full max-w-sm">
+                          <DonutChart data={donutData} />
+                        </div>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">
+                          ไม่มีข้อมูลสำหรับการแสดงผล
+                        </p>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  <Card className="h-full">
+                    <CardHeader>
+                      <CardTitle>แนวโน้มรายเดือน</CardTitle>
+                      <CardDescription>การเปลี่ยนแปลงของยอดรวมในแต่ละกลุ่ม</CardDescription>
+                    </CardHeader>
+                    <CardContent className="min-h-[300px]">
+                      {Object.keys(groupedData).length > 1 ? (
+                        <LineChart
+                          data={{
+                            labels: Object.keys(groupedData),
+                            datasets: [
+                              {
+                                label: "ปกติ",
+                                data: Object.values(groupedData).map(
+                                  (districts) => {
+                                    return Object.values(districts).reduce(
+                                      (total, subdistricts) => {
+                                        return (
+                                          total +
+                                          Object.values(subdistricts).reduce(
+                                            (subTotal, villages) => {
+                                              return (
+                                                subTotal +
+                                                villages.reduce(
+                                                  (villageTotal, village) =>
+                                                    villageTotal + village.normal,
+                                                  0
+                                                )
+                                              );
+                                            },
+                                            0
+                                          )
+                                        );
+                                      },
+                                      0
+                                    );
                                   }
-                                : undefined
-                            }
-                          />
-                        );
-                      })}
-                    </div>
+                                ),
+                                borderColor: "hsl(var(--success))",
+                                backgroundColor: "hsla(var(--success), 0.1)",
+                                tension: 0.4,
+                              },
+                              {
+                                label: "เสี่ยง",
+                                data: Object.values(groupedData).map(
+                                  (districts) => {
+                                    return Object.values(districts).reduce(
+                                      (total, subdistricts) => {
+                                        return (
+                                          total +
+                                          Object.values(subdistricts).reduce(
+                                            (subTotal, villages) => {
+                                              return (
+                                                subTotal +
+                                                villages.reduce(
+                                                  (villageTotal, village) =>
+                                                    villageTotal + village.risk,
+                                                  0
+                                                )
+                                              );
+                                            },
+                                            0
+                                          )
+                                        );
+                                      },
+                                      0
+                                    );
+                                  }
+                                ),
+                                borderColor: "hsl(var(--warning))",
+                                backgroundColor: "hsla(var(--warning), 0.1)",
+                                tension: 0.4,
+                              },
+                              {
+                                label: "ป่วย",
+                                data: Object.values(groupedData).map(
+                                  (districts) => {
+                                    return Object.values(districts).reduce(
+                                      (total, subdistricts) => {
+                                        return (
+                                          total +
+                                          Object.values(subdistricts).reduce(
+                                            (subTotal, villages) => {
+                                              return (
+                                                subTotal +
+                                                villages.reduce(
+                                                  (villageTotal, village) =>
+                                                    villageTotal + village.sick,
+                                                  0
+                                                )
+                                              );
+                                            },
+                                            0
+                                          )
+                                        );
+                                      },
+                                      0
+                                    );
+                                  }
+                                ),
+                                borderColor: "hsl(var(--destructive))",
+                                backgroundColor: "hsla(var(--destructive), 0.1)",
+                                tension: 0.4,
+                              },
+                            ],
+                          }}
+                        />
+                      ) : (
+                        <div className="flex h-full items-center justify-center">
+                           <p className="text-sm text-muted-foreground">
+                            ต้องมีข้อมูลหลายช่วงเวลาเพื่อแสดงแนวโน้ม
+                          </p>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </section>
 
-                    <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-                      <Card>
-                        <CardHeader className="pb-2">
-                          <CardTitle className="flex items-center gap-2">
-                            <TrendingUp className="h-5 w-5 text-primary" />
-                            ไฮไลต์ล่าสุด
-                          </CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-3">
-                          {quickHighlights.length ? (
-                            <ul className="space-y-2">
-                              {quickHighlights.map((item) => {
-                                const toneClass =
-                                  item.tone === "success"
-                                    ? "text-success"
-                                    : item.tone === "warning"
-                                    ? "text-warning"
-                                    : item.tone === "destructive"
-                                    ? "text-destructive"
-                                    : "text-muted-foreground";
-                                return (
-                                  <li key={item.id} className="text-sm">
-                                    <p className={`font-semibold ${toneClass}`}>{item.title}</p>
-                                    <p className="text-xs text-muted-foreground">{item.detail}</p>
-                                  </li>
-                                );
-                              })}
-                            </ul>
-                          ) : (
-                            <p className="text-sm text-muted-foreground">
-                              เลือกตัวกรองและกดค้นหาเพื่อดูข้อมูลเชิงลึก
-                            </p>
-                          )}
-                        </CardContent>
-                      </Card>
-
-                      <Card>
-                        <CardHeader className="pb-2">
-                          <CardTitle className="flex items-center gap-2">
-                            <Award className="h-5 w-5 text-warning" />
-                            พื้นที่ที่ต้องเฝ้าระวัง
-                          </CardTitle>
-                          <CardDescription>5 อันดับแรกตามจำนวนผู้เสี่ยง</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                          {topRiskVillages.length ? (
-                            <div className="space-y-3 text-sm">
-                              {topRiskVillages.map((item, index) => (
-                                <div
-                                  key={`${item.district}-${item.subdistrict}-${item.village}-${index}`}
-                                  className="flex items-start justify-between rounded-md border bg-muted/30 p-3"
-                                >
-                                  <div>
-                                    <p className="font-semibold text-foreground">
-                                      {index + 1}. {item.village || "ไม่ระบุหมู่บ้าน"}
-                                    </p>
-                                    <p className="text-xs text-muted-foreground">
-                                      {[selectedMooLabel, item.subdistrict, item.district]
-                                        .filter(Boolean)
-                                        .join(" • ")}
-                                    </p>
-                                  </div>
-                                  <div className="text-right">
-                                    <p className="text-sm font-medium text-warning">
-                                      {item.risk.toLocaleString()} คน
-                                    </p>
-                                    <p className="text-xs text-muted-foreground">
-                                      ทั้งหมด {item.total.toLocaleString()} คน
-                                    </p>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <p className="text-sm text-muted-foreground">
-                              ยังไม่มีข้อมูลพื้นที่เสี่ยงสำหรับตัวกรองนี้
-                            </p>
-                          )}
-                        </CardContent>
-                      </Card>
-
-                      <Card>
-                        <CardHeader className="pb-2">
-                          <CardTitle className="flex items-center gap-2">
-                            <Stethoscope className="h-5 w-5 text-primary" />
-                            การส่งต่อหน่วยบริการ
-                          </CardTitle>
-                          <CardDescription>ภาพรวมการส่งต่อในตัวกรองนี้</CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-3 text-sm text-muted-foreground">
-                          {totalRefer > 0 ? (
-                            <>
-                              <div className="flex items-center justify-between text-foreground">
-                                <span>จำนวนส่งต่อทั้งหมด</span>
-                                <span className="font-semibold text-primary">
-                                  {totalRefer.toLocaleString()} ครั้ง
-                                </span>
-                              </div>
-                              <div className="flex items-center justify-between">
-                                <span>พื้นที่ที่มีการส่งต่อ</span>
-                                <span className="font-medium">
-                                  {referLocations.length.toLocaleString()} พื้นที่
-                                </span>
-                              </div>
-                              <div className="flex items-center justify-between">
-                                <span>เฉลี่ยต่อพื้นที่</span>
-                                <span className="font-medium">
-                                  {averageRefer.toFixed(1)} ครั้ง
-                                </span>
-                              </div>
-                            </>
-                          ) : (
-                            <p className="text-sm text-muted-foreground">
-                              ยังไม่มีการบันทึกข้อมูลการส่งต่อหน่วยบริการในตัวกรองนี้
-                            </p>
-                          )}
-                        </CardContent>
-                      </Card>
-                    </div>
-                  </section>
-
-                  <Separator />
-                </>
-              ) : null}
-
-              <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>สัดส่วนสถานะผู้รับการประเมิน</CardTitle>
-                    <CardDescription>แบ่งสัดส่วนตามสถานะล่าสุด</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    {summary && donutData ? (
-                      <div className="max-w-md mx-auto">
-                        <DonutChart data={donutData} />
-                      </div>
-                    ) : (
-                      <p className="text-sm text-muted-foreground">
-                        ไม่มีข้อมูลสำหรับการแสดงในช่วงเวลานี้
-                      </p>
-                    )}
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>แนวโน้มข้อมูลตามช่วงเวลา</CardTitle>
-                    <CardDescription>การเปลี่ยนแปลงรายเดือน</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    {Object.keys(groupedData).length > 1 ? (
-                      <LineChart
-                        data={{
-                          labels: Object.keys(groupedData),
-                          datasets: [
-                            {
-                              label: "ปกติ",
-                              data: Object.values(groupedData).map((districts) => {
-                                return Object.values(districts).reduce((total, subdistricts) => {
-                                  return total + Object.values(subdistricts).reduce((subTotal, villages) => {
-                                    return subTotal + villages.reduce((villageTotal, village) => villageTotal + village.normal, 0);
-                                  }, 0);
-                                }, 0);
-                              }),
-                              borderColor: "hsl(var(--success))",
-                              backgroundColor: "hsla(var(--success), 0.1)",
-                              tension: 0.4,
-                            },
-                            {
-                              label: "เสี่ยง",
-                              data: Object.values(groupedData).map((districts) => {
-                                return Object.values(districts).reduce((total, subdistricts) => {
-                                  return total + Object.values(subdistricts).reduce((subTotal, villages) => {
-                                    return subTotal + villages.reduce((villageTotal, village) => villageTotal + village.risk, 0);
-                                  }, 0);
-                                }, 0);
-                              }),
-                              borderColor: "hsl(var(--warning))",
-                              backgroundColor: "hsla(var(--warning), 0.1)",
-                              tension: 0.4,
-                            },
-                            {
-                              label: "ป่วย",
-                              data: Object.values(groupedData).map((districts) => {
-                                return Object.values(districts).reduce((total, subdistricts) => {
-                                  return total + Object.values(subdistricts).reduce((subTotal, villages) => {
-                                    return subTotal + villages.reduce((villageTotal, village) => villageTotal + village.sick, 0);
-                                  }, 0);
-                                }, 0);
-                              }),
-                              borderColor: "hsl(var(--destructive))",
-                              backgroundColor: "hsla(var(--destructive), 0.1)",
-                              tension: 0.4,
-                            },
-                          ],
-                        }}
-                      />
-                    ) : (
-                      <p className="text-sm text-muted-foreground">
-                        ต้องมีข้อมูลหลายช่วงเวลาเพื่อแสดงแนวโน้ม
-                      </p>
-                    )}
-                  </CardContent>
-                </Card>
-              </section>
-
-              <Separator />
-
-              <section>
-                <Card className="h-full">
+                <Separator />
+                
+                {/* 3. Area Situation */}
+                <section>
+                  <Card className="h-full">
                   <CardHeader className="pb-4 space-y-1">
                     <CardTitle className="flex flex-col gap-1">
                       <span className="flex items-center gap-2">
@@ -2106,9 +2055,11 @@ const Detail = () => {
                         {Number.isFinite(diffTotals.total) ? (
                           <p
                             className={`text-xs font-semibold ${
-                              metricTone("total", diffTotals.total) === "success"
+                              metricTone("total", diffTotals.total) ===
+                              "success"
                                 ? "text-success"
-                                : metricTone("total", diffTotals.total) === "destructive"
+                                : metricTone("total", diffTotals.total) ===
+                                  "destructive"
                                 ? "text-destructive"
                                 : "text-muted-foreground"
                             }`}
@@ -2139,19 +2090,20 @@ const Detail = () => {
                         </p>
                         <p className="mt-1 text-base font-semibold text-destructive">
                           {highestSickRatioDistrict
-                            ? `${(highestSickRatioDistrict.ratio * 100).toFixed(1)}%`
+                            ? `${(highestSickRatioDistrict.ratio * 100).toFixed(
+                                1
+                              )}%`
                             : "ยังไม่มีข้อมูล"}
                         </p>
                         <p className="text-xs text-muted-foreground mt-1">
                           {highestSickRatioDistrict
-                            ? `${highestSickRatioDistrict.name} (${highestSickRatioDistrict.sick.toLocaleString()} คน)`
+                            ? `${
+                                highestSickRatioDistrict.name
+                              } (${highestSickRatioDistrict.sick.toLocaleString()} คน)`
                             : "รอข้อมูลล่าสุด"}
                         </p>
                       </div>
                     </div>
-
-                    
-
                   </CardContent>
                 </Card>
               </section>
@@ -2170,14 +2122,18 @@ const Detail = () => {
                     <Tabs
                       value={factorView}
                       onValueChange={(value) =>
-                        setFactorView((value as "absolute" | "percentage") || "absolute")
+                        setFactorView(
+                          (value as "absolute" | "percentage") || "absolute"
+                        )
                       }
                       className="space-y-4"
                     >
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <TabsList className="grid w-full grid-cols-2 sm:w-auto">
                           <TabsTrigger value="absolute">จำนวนจริง</TabsTrigger>
-                          <TabsTrigger value="percentage">สัดส่วน (%)</TabsTrigger>
+                          <TabsTrigger value="percentage">
+                            สัดส่วน (%)
+                          </TabsTrigger>
                         </TabsList>
                         <p className="text-xs text-muted-foreground sm:text-right">
                           {factorView === "percentage"
@@ -2204,14 +2160,17 @@ const Detail = () => {
                 <CardHeader>
                   <CardTitle>รายละเอียดข้อมูลรายพื้นที่</CardTitle>
                   <CardDescription>
-                    ค้นหาด้วยชื่ออำเภอ ตำบล หมู่บ้าน หมู่ที่ หรือช่วงเวลาเพื่อกรองรายการ
+                    ค้นหาด้วยชื่ออำเภอ ตำบล หมู่บ้าน หมู่ที่
+                    หรือช่วงเวลาเพื่อกรองรายการ
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <Input
                       value={locationSearchTerm}
-                      onChange={(event) => setLocationSearchTerm(event.target.value)}
+                      onChange={(event) =>
+                        setLocationSearchTerm(event.target.value)
+                      }
                       placeholder="ค้นหาอำเภอ / ตำบล / หมู่บ้าน / หมู่ที่ หรือช่วงเวลา"
                       className="w-full sm:w-64"
                       disabled={!hasAnyData}
@@ -2224,7 +2183,9 @@ const Detail = () => {
                         onClick={() => setShowReferMetrics((prev) => !prev)}
                         disabled={!hasAnyData}
                       >
-                        {showReferMetrics ? "ซ่อนคอลัมน์ส่งต่อ" : "แสดงคอลัมน์ส่งต่อ"}
+                        {showReferMetrics
+                          ? "ซ่อนคอลัมน์ส่งต่อ"
+                          : "แสดงคอลัมน์ส่งต่อ"}
                       </Button>
                       {locationSearchTerm ? (
                         <Button
@@ -2252,100 +2213,141 @@ const Detail = () => {
                     </p>
                   ) : (
                     <Accordion type="single" collapsible className="w-full">
-                      {Object.entries(filteredGroupedData).map(([periodKey, districts]) => (
-                        <AccordionItem key={periodKey} value={periodKey}>
-                          <AccordionTrigger className="hover:no-underline">
-                            <div className="flex items-center justify-between w-full mr-4">
-                              <span className="text-left font-medium">
-                                {periodKey}
-                              </span>
-                              <span className="text-sm text-muted-foreground">
-                                อำเภอ: {Object.keys(districts).length.toLocaleString()}
-                              </span>
-                            </div>
-                          </AccordionTrigger>
-                          <AccordionContent className="pb-4">
-                            <div className="space-y-4">
-                              {Object.entries(districts).map(([districtKey, subdistricts]) => (
-                                <Card key={districtKey} className="border-muted">
-                                  <CardHeader className="pb-3">
-                                    <div className="flex items-center justify-between">
-                                      <CardTitle className="text-lg flex items-center gap-2">
-                                        <Layers className="w-4 h-4" />
-                                        {districtKey}
-                                      </CardTitle>
-                                      <span className="text-sm text-muted-foreground">
-                                        ตำบล: {Object.keys(subdistricts).length}
-                                      </span>
-                                    </div>
-                                  </CardHeader>
-                                  <CardContent className="space-y-3">
-                                    {Object.entries(subdistricts).map(([subdistrictKey, villages]) => (
-                                      <div key={subdistrictKey} className="space-y-2">
-                                        <div className="flex items-center gap-2 pb-2 border-b">
-                                          <MapPin className="w-4 h-4 text-primary" />
-                                          <span className="font-medium">{subdistrictKey}</span>
-                                          <span className="text-sm text-muted-foreground ml-auto">
-                                            หมู่บ้าน: {villages.length}
+                      {Object.entries(filteredGroupedData).map(
+                        ([periodKey, districts]) => (
+                          <AccordionItem key={periodKey} value={periodKey}>
+                            <AccordionTrigger className="hover:no-underline">
+                              <div className="flex items-center justify-between w-full mr-4">
+                                <span className="text-left font-medium">
+                                  {periodKey}
+                                </span>
+                                <span className="text-sm text-muted-foreground">
+                                  อำเภอ:{" "}
+                                  {Object.keys(
+                                    districts
+                                  ).length.toLocaleString()}
+                                </span>
+                              </div>
+                            </AccordionTrigger>
+                            <AccordionContent className="pb-4">
+                              <div className="space-y-4">
+                                {Object.entries(districts).map(
+                                  ([districtKey, subdistricts]) => (
+                                    <Card
+                                      key={districtKey}
+                                      className="border-muted"
+                                    >
+                                      <CardHeader className="pb-3">
+                                        <div className="flex items-center justify-between">
+                                          <CardTitle className="text-lg flex items-center gap-2">
+                                            <Layers className="w-4 h-4" />
+                                            {districtKey}
+                                          </CardTitle>
+                                          <span className="text-sm text-muted-foreground">
+                                            ตำบล:{" "}
+                                            {Object.keys(subdistricts).length}
                                           </span>
                                         </div>
-                                        <div className="grid grid-cols-1 gap-2 pl-6">
-                                          {villages.map((village, index) => (
+                                      </CardHeader>
+                                      <CardContent className="space-y-3">
+                                        {Object.entries(subdistricts).map(
+                                          ([subdistrictKey, villages]) => (
                                             <div
-                                              key={index}
-                                              className="flex items-center justify-between p-3 rounded-lg border bg-muted/30 hover:bg-muted/50"
+                                              key={subdistrictKey}
+                                              className="space-y-2"
                                             >
-                                              <div className="flex items-center gap-3">
-                                                <span className="text-sm font-medium">
-                                                  หมู่บ้าน {village.village} {village.moo && `- หมู่ที่ ${village.moo}`}
+                                              <div className="flex items-center gap-2 pb-2 border-b">
+                                                <MapPin className="w-4 h-4 text-primary" />
+                                                <span className="font-medium">
+                                                  {subdistrictKey}
+                                                </span>
+                                                <span className="text-sm text-muted-foreground ml-auto">
+                                                  หมู่บ้าน: {villages.length}
                                                 </span>
                                               </div>
-                                              <div className="flex items-center gap-6 text-sm">
-                                                <div className="text-center">
-                                                  <div className="text-xs text-muted-foreground">ปกติ</div>
-                                                  <div className="font-medium text-success">
-                                                    {village.normal.toLocaleString()}
-                                                  </div>
-                                                </div>
-                                                <div className="text-center">
-                                                  <div className="text-xs text-muted-foreground">เสี่ยง</div>
-                                                  <div className="font-medium text-warning">
-                                                    {village.risk.toLocaleString()}
-                                                  </div>
-                                                </div>
-                                                <div className="text-center">
-                                                  <div className="text-xs text-muted-foreground">ป่วย</div>
-                                                  <div className="font-medium text-destructive">
-                                                    {village.sick.toLocaleString()}
-                                                  </div>
-                                                </div>
-                                                <div className="text-center">
-                                                  <div className="text-xs text-muted-foreground">รวม</div>
-                                                  <div className="font-medium">
-                                                    {(village.total || village.normal + village.risk + village.sick).toLocaleString()}
-                                                  </div>
-                                                </div>
-                                                {showReferMetrics ? (
-                                                  <div className="text-center">
-                                                    <div className="text-xs text-muted-foreground">ส่งต่อ</div>
-                                                    <div className="font-medium">
-                                                      {(village.referCount ?? 0).toLocaleString()}
+                                              <div className="grid grid-cols-1 gap-2 pl-6">
+                                                {villages.map(
+                                                  (village, index) => (
+                                                    <div
+                                                      key={index}
+                                                      className="flex items-center justify-between p-3 rounded-lg border bg-muted/30 hover:bg-muted/50"
+                                                    >
+                                                      <div className="flex items-center gap-3">
+                                                        <span className="text-sm font-medium">
+                                                          หมู่บ้าน{" "}
+                                                          {village.village}{" "}
+                                                          {village.moo &&
+                                                            `- หมู่ที่ ${village.moo}`}
+                                                        </span>
+                                                      </div>
+                                                      <div className="flex items-center gap-6 text-sm">
+                                                        <div className="text-center">
+                                                          <div className="text-xs text-muted-foreground">
+                                                            ปกติ
+                                                          </div>
+                                                          <div className="font-medium text-success">
+                                                            {village.normal.toLocaleString()}
+                                                          </div>
+                                                        </div>
+                                                        <div className="text-center">
+                                                          <div className="text-xs text-muted-foreground">
+                                                            เสี่ยง
+                                                          </div>
+                                                          <div className="font-medium text-warning">
+                                                            {village.risk.toLocaleString()}
+                                                          </div>
+                                                        </div>
+                                                        <div className="text-center">
+                                                          <div className="text-xs text-muted-foreground">
+                                                            ป่วย
+                                                          </div>
+                                                          <div className="font-medium text-destructive">
+                                                            {village.sick.toLocaleString()}
+                                                          </div>
+                                                        </div>
+                                                        <div className="text-center">
+                                                          <div className="text-xs text-muted-foreground">
+                                                            รวม
+                                                          </div>
+                                                          <div className="font-medium">
+                                                            {(
+                                                              village.total ||
+                                                              village.normal +
+                                                                village.risk +
+                                                                village.sick
+                                                            ).toLocaleString()}
+                                                          </div>
+                                                        </div>
+                                                        {showReferMetrics ? (
+                                                          <div className="text-center">
+                                                            <div className="text-xs text-muted-foreground">
+                                                              ส่งต่อ
+                                                            </div>
+                                                            <div className="font-medium">
+                                                              {(
+                                                                village.referCount ??
+                                                                0
+                                                              ).toLocaleString()}
+                                                            </div>
+                                                          </div>
+                                                        ) : null}
+                                                      </div>
                                                     </div>
-                                                  </div>
-                                                ) : null}
+                                                  )
+                                                )}
                                               </div>
                                             </div>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </CardContent>
-                                </Card>
-                              ))}
-                            </div>
-                          </AccordionContent>
-                        </AccordionItem>
-                      ))}
+                                          )
+                                        )}
+                                      </CardContent>
+                                    </Card>
+                                  )
+                                )}
+                              </div>
+                            </AccordionContent>
+                          </AccordionItem>
+                        )
+                      )}
                     </Accordion>
                   )}
                 </CardContent>
