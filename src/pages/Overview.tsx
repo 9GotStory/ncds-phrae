@@ -1,5 +1,5 @@
 ﻿import { useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+
 import { useQuery } from "@tanstack/react-query";
 import {
   ActivitySquare,
@@ -14,7 +14,7 @@ import {
 import { Navigation } from "@/components/Navigation";
 import { StatsCard } from "@/components/StatsCard";
 import { LoadingState } from "@/components/LoadingState";
-import { HeatMap } from "@/components/HeatMap";
+
 import { BarChart } from "@/components/charts/BarChart";
 import { LineChart } from "@/components/charts/LineChart";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,7 +39,6 @@ const DASHBOARD_STALE_TIME = 60 * 1000;
 const DASHBOARD_GC_TIME = 5 * 60 * 1000;
 
 const Overview = () => {
-  const navigate = useNavigate();
   const dashboardQuery = useQuery({
     queryKey: ["dashboard", "overview", "general"],
     queryFn: ({ signal }) =>
@@ -114,45 +113,12 @@ const Overview = () => {
 
   type SummaryMetricKey = "total" | "normal" | "risk" | "sick";
 
-  const handleDrillToDetail = (params: {
-    targetGroup?: string;
-    district?: string;
-    subdistrict?: string;
-    village?: string;
-    year?: string;
-    month?: string;
-  }) => {
-    const searchParams = new URLSearchParams();
-    const targetGroup = params.targetGroup ?? defaultTargetGroup ?? "general";
-    if (targetGroup) {
-      searchParams.set("targetGroup", targetGroup);
-    }
-    if (params.district) {
-      searchParams.set("district", params.district);
-    }
-    if (params.subdistrict) {
-      searchParams.set("subdistrict", params.subdistrict);
-    }
-    if (params.village) {
-      searchParams.set("village", params.village);
-    }
-    if (params.year) {
-      searchParams.set("year", params.year);
-    }
-    if (params.month) {
-      searchParams.set("month", params.month);
-    }
-
-    const queryString = searchParams.toString();
-    navigate(queryString ? `/detail?${queryString}` : "/detail");
-  };
   const summary = data?.summary;
   const adjustedSummary = adjustmentSummary?.adjusted;
 
   const toSafeNumber = (value: unknown): number =>
     typeof value === "number" && Number.isFinite(value) ? value : 0;
-  const clampNonNegative = (value: number): number =>
-    value < 0 ? 0 : value;
+  const clampNonNegative = (value: number): number => (value < 0 ? 0 : value);
 
   const summaryValues = useMemo(() => {
     const source = adjustedSummary ?? summary;
@@ -335,30 +301,9 @@ const Overview = () => {
                       <ActivitySquare className="w-5 h-5 text-primary" />
                       สถานการณ์เชิงพื้นที่
                     </span>
-                    <span className="text-sm font-normal text-muted-foreground">
-                      คลิกที่อำเภอเพื่อเจาะลึกข้อมูลในหน้ารายละเอียด
-                    </span>
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="rounded-xl border bg-muted/30 p-3">
-                    {districts.length > 0 ? (
-                      <HeatMap
-                        districts={districts}
-                        onSelectDistrict={(district) =>
-                          handleDrillToDetail({
-                            targetGroup: defaultTargetGroup,
-                            district: district.name ?? district.id,
-                          })
-                        }
-                      />
-                    ) : (
-                      <div className="text-center text-sm text-muted-foreground py-10">
-                        ไม่มีข้อมูลสำหรับแสดงผล
-                      </div>
-                    )}
-                  </div>
-
                   <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 text-sm">
                     <div className="rounded-lg border bg-background/80 p-3">
                       <p className="text-xs uppercase tracking-wide text-muted-foreground">
@@ -418,11 +363,15 @@ const Overview = () => {
                 {categories
                   .filter((item) => item.key !== "Overview")
                   .map((item) => {
-                    const safeNormal = clampNonNegative(toSafeNumber(item.normal));
+                    const safeNormal = clampNonNegative(
+                      toSafeNumber(item.normal)
+                    );
                     const safeRisk = clampNonNegative(toSafeNumber(item.risk));
                     const safeSick = clampNonNegative(toSafeNumber(item.sick));
                     const totalCategory = clampNonNegative(
-                      toSafeNumber(item.total ?? safeNormal + safeRisk + safeSick)
+                      toSafeNumber(
+                        item.total ?? safeNormal + safeRisk + safeSick
+                      )
                     );
                     const normalShare = totalCategory
                       ? (safeNormal / totalCategory) * 100
@@ -453,35 +402,35 @@ const Overview = () => {
 
                           <div className="space-y-3 text-xs">
                             <div className="rounded-md border bg-success/10 p-3">
-                            <div className="flex items-baseline justify-between text-success font-semibold">
-                              <span>ปกติ</span>
-                              <span>{normalShare.toFixed(1)}%</span>
+                              <div className="flex items-baseline justify-between text-success font-semibold">
+                                <span>ปกติ</span>
+                                <span>{normalShare.toFixed(1)}%</span>
+                              </div>
+                              <div className="mt-1 flex justify-between text-success/80 font-medium">
+                                <span>จำนวน</span>
+                                <span>{safeNormal.toLocaleString()} คน</span>
+                              </div>
                             </div>
-                            <div className="mt-1 flex justify-between text-success/80 font-medium">
-                              <span>จำนวน</span>
-                              <span>{safeNormal.toLocaleString()} คน</span>
+                            <div className="rounded-md border bg-warning/10 p-3">
+                              <div className="flex items-baseline justify-between text-warning font-semibold">
+                                <span>เสี่ยง</span>
+                                <span>{riskShare.toFixed(1)}%</span>
+                              </div>
+                              <div className="mt-1 flex justify-between text-warning/80 font-medium">
+                                <span>จำนวน</span>
+                                <span>{safeRisk.toLocaleString()} คน</span>
+                              </div>
                             </div>
-                          </div>
-                          <div className="rounded-md border bg-warning/10 p-3">
-                            <div className="flex items-baseline justify-between text-warning font-semibold">
-                              <span>เสี่ยง</span>
-                              <span>{riskShare.toFixed(1)}%</span>
+                            <div className="rounded-md border bg-destructive/10 p-3">
+                              <div className="flex items-baseline justify-between text-destructive font-semibold">
+                                <span>ป่วย</span>
+                                <span>{sickShare.toFixed(1)}%</span>
+                              </div>
+                              <div className="mt-1 flex justify-between text-destructive/80 font-medium">
+                                <span>จำนวน</span>
+                                <span>{safeSick.toLocaleString()} คน</span>
+                              </div>
                             </div>
-                            <div className="mt-1 flex justify-between text-warning/80 font-medium">
-                              <span>จำนวน</span>
-                              <span>{safeRisk.toLocaleString()} คน</span>
-                            </div>
-                          </div>
-                          <div className="rounded-md border bg-destructive/10 p-3">
-                            <div className="flex items-baseline justify-between text-destructive font-semibold">
-                              <span>ป่วย</span>
-                              <span>{sickShare.toFixed(1)}%</span>
-                            </div>
-                            <div className="mt-1 flex justify-between text-destructive/80 font-medium">
-                              <span>จำนวน</span>
-                              <span>{safeSick.toLocaleString()} คน</span>
-                            </div>
-                          </div>
                           </div>
                         </CardContent>
                       </Card>
