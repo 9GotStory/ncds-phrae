@@ -87,6 +87,59 @@ const Overview = () => {
     return t > 0 && d.risk / t >= 0.2;
   });
 
+  // 4. Trend Calculation (Month-over-Month)
+  const comparisonStats = useMemo(() => {
+    if (!detailTable || detailTable.length === 0) return null;
+
+    // Detect latest 2 months
+    const periods = Array.from(
+      new Set(
+        detailTable
+          .filter((r) => r.year && r.month)
+          .map((r) => `${r.year}-${String(r.month).padStart(2, "0")}`)
+      )
+    )
+      .sort()
+      .reverse(); // Descending [2025-02, 2025-01, ...]
+
+    if (periods.length < 2) return null;
+
+    const currentPeriod = periods[0];
+    const prevPeriod = periods[1];
+
+    const currentData = detailTable.filter(
+      (r) => `${r.year}-${String(r.month).padStart(2, "0")}` === currentPeriod
+    );
+    const prevData = detailTable.filter(
+      (r) => `${r.year}-${String(r.month).padStart(2, "0")}` === prevPeriod
+    );
+
+    // Calc Totals
+    const calc = (rows: typeof detailTable) => {
+      return rows.reduce(
+        (acc, r) => ({
+          screened: acc.screened + (r.normal + r.risk + r.sick),
+          risk: acc.risk + r.risk,
+        }),
+        { screened: 0, risk: 0 }
+      );
+    };
+
+    const current = calc(currentData);
+    const prev = calc(prevData);
+
+    const getPctChange = (curr: number, old: number) => {
+      if (old === 0) return 0;
+      return ((curr - old) / old) * 100;
+    };
+
+    return {
+      periodLabel: `เทียบกับเดือนก่อนหน้า (${prevPeriod})`,
+      screenedChange: getPctChange(current.screened, prev.screened),
+      riskChange: getPctChange(current.risk, prev.risk),
+    };
+  }, [detailTable]);
+
   return (
     <div className="min-h-screen bg-slate-50/50 pb-20">
       <Navigation />
@@ -117,7 +170,7 @@ const Overview = () => {
         )}
 
         {isInitialLoading ? (
-          <LoadingState message="กำลังเตรียมข้อมูลศูนย์บัญชาการ..." />
+          <LoadingState message="กำลังโหลดข้อมูล..." />
         ) : (
           <>
             {/* 1. Hero Section: Executive Scorecard */}
@@ -126,6 +179,7 @@ const Overview = () => {
               healthScore={healthScore}
               totalPopulation={totalPop}
               criticalDistricts={criticalDistricts}
+              comparisonStats={comparisonStats}
             />
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

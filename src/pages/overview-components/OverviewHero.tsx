@@ -34,6 +34,11 @@ interface OverviewHeroProps {
   healthScore: number; // 0-100
   totalPopulation: number;
   criticalDistricts: DashboardDistrict[];
+  comparisonStats?: {
+    periodLabel: string;
+    screenedChange: number;
+    riskChange: number;
+  } | null;
 }
 
 export function OverviewHero({
@@ -41,6 +46,7 @@ export function OverviewHero({
   healthScore, // This is essentially normal %
   totalPopulation,
   criticalDistricts,
+  comparisonStats,
 }: OverviewHeroProps) {
   const navigate = useNavigate();
 
@@ -57,6 +63,24 @@ export function OverviewHero({
   const riskPct = riskStat?.percentage || 0;
   // Calculate sick pct as remainder or strict calculation if value exists
   const sickPct = sickStat?.percentage || 100 - normalPct - riskPct;
+
+  const renderTrend = (pctChange: number) => {
+    if (pctChange === 0) return null;
+    const isPositive = pctChange > 0;
+    const Icon = isPositive ? ArrowRight : ArrowRight; // Typically arrows up/down logic
+    // For Screened: More is usually good (Active). For Risk: More is bad.
+    // Let's stick to neutral mathematical change for now
+    return (
+      <span
+        className={`ml-2 text-[10px] font-medium px-1.5 py-0.5 rounded-full flex items-center gap-1 w-fit ${
+          isPositive ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+        }`}
+      >
+        {isPositive ? "+" : ""}
+        {pctChange.toFixed(1)}%
+      </span>
+    );
+  };
 
   return (
     <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 mb-8">
@@ -134,11 +158,14 @@ export function OverviewHero({
               {screenedCount.toLocaleString()}
             </div>
             <div className="text-xs text-slate-400">ราย (สะสม)</div>
+            {comparisonStats && renderTrend(comparisonStats.screenedChange)}
           </div>
           <div className="flex items-center mt-2 text-xs text-slate-500">
-            <span className="text-slate-400">ข้อมูลจากระบบล่าสุด</span>
+            <span className="text-slate-400">
+              {comparisonStats?.periodLabel || "ข้อมูลจากระบบล่าสุด"}
+            </span>
           </div>
-          <div className="mt-3 text-xs text-slate-500">ข้อมูลล่าสุดจากระบบ</div>
+          {/* <div className="mt-3 text-xs text-slate-500">ข้อมูลล่าสุดจากระบบ</div> */}
         </CardContent>
       </Card>
 
@@ -151,8 +178,9 @@ export function OverviewHero({
           <Activity className="h-4 w-4 text-amber-500" />
         </CardHeader>
         <CardContent>
-          <div className="text-2xl font-bold text-slate-800">
+          <div className="text-2xl font-bold text-slate-800 flex items-center gap-2">
             {(riskStat?.percentage || 0).toFixed(1)}%
+            {comparisonStats && renderTrend(comparisonStats.riskChange)}
           </div>
           <p className="text-xs text-slate-400 mt-1">สัดส่วนกลุ่มเสี่ยง</p>
 

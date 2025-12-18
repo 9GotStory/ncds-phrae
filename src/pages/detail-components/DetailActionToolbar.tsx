@@ -6,7 +6,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, MapPin, Filter, X } from "lucide-react";
+import { Search, MapPin, Filter, X, Loader2 } from "lucide-react";
 import {
   DistrictsMapping,
   DashboardAvailability,
@@ -238,7 +238,10 @@ export function DetailActionToolbar({
           className="w-full shadow-sm bg-primary hover:bg-primary/90 hover:scale-[1.02] active:scale-95 transition-all"
         >
           {isLoading ? (
-            "..."
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              กำลังโหลดข้อมูล...
+            </>
           ) : (
             <>
               <Search className="mr-2 h-4 w-4" /> ค้นหา
@@ -336,7 +339,14 @@ export function DetailActionToolbar({
                     disabled={isLoading}
                     className="w-full bg-primary hover:bg-primary/90 h-11 text-base shadow-md"
                   >
-                    {isLoading ? "กำลังประมวลผล..." : "ยืนยันการค้นหา"}
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        กำลังโหลดข้อมูล...
+                      </>
+                    ) : (
+                      "ยืนยันการค้นหา"
+                    )}
                   </Button>
                 </SheetClose>
               </SheetFooter>

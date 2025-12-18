@@ -7,8 +7,8 @@ import { LoadingState } from "@/components/LoadingState";
 import {
   googleSheetsApi,
   type DashboardDetailRow,
+  type NcdRecord,
 } from "@/services/googleSheetsApi";
-import { getCombinedQueryState } from "@/lib/queryState";
 
 // Components
 import { useDetailFilters } from "./detail-components/useDetailFilters";
@@ -18,9 +18,8 @@ import { InsightsGrid } from "./detail-components/InsightsGrid";
 import { DetailDataTable } from "./detail-components/DetailDataTable";
 
 // Constants
-const DETAIL_STALE_TIME = 0; // Realtime
-const DETAIL_GC_TIME = 5 * 60 * 1000;
-const RECORDS_PAGE_SIZE = 250;
+const DETAIL_STALE_TIME = 5 * 60 * 1000; // 5 Minutes
+const DETAIL_GC_TIME = 10 * 60 * 1000; // 10 Minutes
 
 const Detail = () => {
   // 1. Setup Filters Hook
@@ -40,7 +39,7 @@ const Detail = () => {
     setRecordsPage(1);
   }, [appliedFilters]);
 
-  // 2. Main Data Query
+  // 2. Main Data Query (SINGLE SOURCE OF TRUTH)
   const detailQuery = useQuery({
     queryKey: [
       "detail",
@@ -60,50 +59,20 @@ const Detail = () => {
           subdistrict: appliedFilters.subdistrict || undefined,
           village: appliedFilters.village || undefined,
           moo: appliedFilters.moo || undefined,
-          year: appliedFilters.year ? Number(appliedFilters.year) : undefined,
-          month: appliedFilters.month
-            ? Number(appliedFilters.month)
-            : undefined,
+          year:
+            appliedFilters.year && appliedFilters.year !== "all"
+              ? Number(appliedFilters.year)
+              : undefined,
+          month:
+            appliedFilters.month && appliedFilters.month !== "all"
+              ? Number(appliedFilters.month)
+              : undefined,
         },
         { signal }
       ),
     staleTime: DETAIL_STALE_TIME,
     gcTime: DETAIL_GC_TIME,
-  });
-
-  const recordsQuery = useQuery({
-    enabled: !!appliedFilters,
-    queryKey: [
-      "detail-records",
-      appliedFilters.targetGroup || "all",
-      appliedFilters.district || "all",
-      appliedFilters.subdistrict || "all",
-      appliedFilters.village || "all",
-      appliedFilters.year || "all-year",
-      appliedFilters.month || "all-month",
-      appliedFilters.moo || "all-moo",
-      recordsPage,
-      recordsLimit,
-    ],
-    queryFn: ({ signal }) =>
-      googleSheetsApi.getNcdRecords(
-        {
-          targetGroup: appliedFilters.targetGroup,
-          district: appliedFilters.district || undefined,
-          subdistrict: appliedFilters.subdistrict || undefined,
-          village: appliedFilters.village || undefined,
-          moo: appliedFilters.moo || undefined,
-          year: appliedFilters.year ? Number(appliedFilters.year) : undefined,
-          month: appliedFilters.month
-            ? Number(appliedFilters.month)
-            : undefined,
-          page: recordsPage,
-          limit: recordsLimit,
-        },
-        { signal }
-      ),
-    staleTime: DETAIL_STALE_TIME,
-    gcTime: DETAIL_GC_TIME,
+    placeholderData: (previousData) => previousData,
   });
 
   // 3. Logic & Transforms
@@ -113,9 +82,56 @@ const Detail = () => {
   const summary = data?.summary;
   const adjustmentsSummary = data?.adjustments?.summary;
 
-  const queryState = getCombinedQueryState([detailQuery, recordsQuery]);
-  const showInitialLoading = queryState.isInitialLoading;
-  const isLoading = queryState.isInitialLoading || queryState.isRefreshing;
+  const showInitialLoading = detailQuery.isLoading;
+  const isLoading = detailQuery.isLoading || detailQuery.isRefetching;
+
+  // Calculate effective year for display
+  const effectiveYear = useMemo(() => {
+    if (appliedFilters.year && appliedFilters.year !== "all") {
+      return Number(appliedFilters.year);
+    }
+    if (availability?.years && availability.years.length > 0) {
+      return Math.max(...availability.years);
+    }
+    return new Date().getFullYear() + 543;
+  }, [appliedFilters.year, availability]);
+
+  // --- Synthesize NcdRecords from detailTable ---
+  // This ensures the "Detailed Records" table shows EXACTLY the same data as charts
+  const records: NcdRecord[] = useMemo(() => {
+    if (!data?.detailTable) return [];
+
+    return data.detailTable.map(
+      (row, index) =>
+        ({
+          id:
+            row.id ||
+            `row-${row.district}-${row.subdistrict}-${row.village}-${index}`,
+          targetGroup: appliedFilters.targetGroup || "general",
+          year: row.year || effectiveYear,
+          month: row.month || 0,
+          district: row.district,
+          subdistrict: row.subdistrict,
+          village: row.village,
+          moo: row.moo,
+          referCount: row.referCount,
+          // Adapt flat stats to nested metrics for DetailDataTable compatibility
+          metrics: {
+            overview: {
+              normal: row.normal || 0,
+              risk: row.risk || 0,
+              sick: row.sick || 0,
+            },
+          },
+        } as NcdRecord)
+    );
+  }, [data?.detailTable, effectiveYear, appliedFilters.targetGroup]);
+
+  // Client-side pagination
+  const paginatedRecords = useMemo(() => {
+    const startIndex = (recordsPage - 1) * recordsLimit;
+    return records.slice(startIndex, startIndex + recordsLimit);
+  }, [records, recordsPage, recordsLimit]);
 
   // --- Helper Fns ---
   const toValidNumber = (val: unknown) =>
@@ -204,40 +220,25 @@ const Detail = () => {
     ];
   }, [adjustedTotals, baselineTotals, diffTotals]);
 
-  // --- Insight Logic (Server Side Preferred) ---
-  // ---------------------------------------------------------
-  // REVISED LOGIC: ALWAYS SHOW VILLAGE LEVEL (DEEPEST)
-  // to answer "Which Village? Which Moo?" immediately.
-  // ---------------------------------------------------------
-
+  // --- Insight Logic ---
   const topRiskAreas = useMemo(() => {
-    // 1. Primary Source: Client-side Aggregation from Records
-    // We prefer this because it allows us to show specific "Village/Moo" details
-    // even when viewing the whole Province (which typically only returns District stats).
     if (data?.detailTable && data.detailTable.length > 0) {
       const map = new Map();
 
       data.detailTable.forEach((row) => {
-        // Unique Key for Village: District + Subdistrict + Village + Moo
-        // If any part is missing, fallback to whatever is available to avoid data loss
-        // But target level is definitively Village/Moo.
         const key = `${row.district}-${row.subdistrict}-${row.village}-${
           row.moo || "0"
         }`;
 
-        // Construct the detailed label ONE TIME
-        /* format: หมู่ที่ 1 ร้องกวาง (ต.ร้องกวาง, อ.ร้องกวาง) */
         const mooPart = row.moo ? `หมู่ที่ ${row.moo} ` : "";
-        const villagePart = row.village
-          ? `${row.village}`
-          : row.name || "ไม่ระบุชื่อ";
+        const villagePart = row.village ? `${row.village}` : "ไม่ระบุชื่อ";
         const contextPart = `(ต.${row.subdistrict || "?"}, อ.${
           row.district || "?"
         })`;
         const fullLabel = `${mooPart}${villagePart} ${contextPart}`;
 
         const exist = map.get(key) || {
-          name: row.village, // internal use
+          name: row.village,
           sub: "หมู่บ้าน",
           fullLabel: fullLabel,
           normal: 0,
@@ -249,26 +250,20 @@ const Detail = () => {
         exist.risk += row.risk || 0;
         exist.normal += row.normal || 0;
         exist.sick += row.sick || 0;
-        exist.total += row.normal + row.risk + row.sick || 0;
+        exist.total += (row.normal || 0) + (row.risk || 0) + (row.sick || 0);
 
         map.set(key, exist);
       });
 
-      // Sort by Risk (High to Low)
       return Array.from(map.values()).sort((a: any, b: any) => b.risk - a.risk);
     }
 
-    // 2. Fallback: comparison.areas (If detailTable is empty/paginated out)
-    // This usually follows the drill-down level (District/Sub), but we try to label it clearly.
     if (data?.comparison?.areas && data.comparison.areas.length > 0) {
       return data.comparison.areas
         .map((area) => {
-          // ... (keep existing fallback logic for safety, but detailTable should likely cover 99% cases)
-          // Determine meaningful label context based on filter depth
-          let contextLabel = area.name; // Default
+          let contextLabel = area.name;
           let subLabel = "";
 
-          // ... (Simplified fallback context)
           if (appliedFilters.subdistrict) {
             subLabel = "หมู่บ้าน";
             contextLabel = `บ้าน${area.name} (ต.${appliedFilters.subdistrict})`;
@@ -284,19 +279,18 @@ const Detail = () => {
             name: area.name,
             sub: subLabel,
             fullLabel: contextLabel,
-            risk: area.stats?.risk || area.risk || 0,
+            risk: area.stats?.risk || 0,
             total:
-              (area.stats?.normal || area.normal || 0) +
-              (area.stats?.risk || area.risk || 0) +
-              (area.stats?.sick || area.sick || 0),
-            normal: area.stats?.normal || area.normal || 0,
-            sick: area.stats?.sick || area.sick || 0,
+              (area.stats?.normal || 0) +
+              (area.stats?.risk || 0) +
+              (area.stats?.sick || 0),
+            normal: area.stats?.normal || 0,
+            sick: area.stats?.sick || 0,
           };
         })
         .sort((a, b) => b.risk - a.risk);
     }
 
-    // 3. Fallback: Districts
     if (
       data?.districts &&
       data.districts.length > 0 &&
@@ -319,8 +313,6 @@ const Detail = () => {
   }, [data, appliedFilters]);
 
   // Referrals
-  // Needs 'referCount' from records or district stats.
-  // DashboardDistrict has 'referCount'.
   const totalRefer = useMemo(() => {
     if (data?.districts) {
       return data.districts.reduce((sum, d) => sum + (d.referCount || 0), 0);
@@ -341,10 +333,8 @@ const Detail = () => {
     return 0;
   }, [data]);
 
-  // Top Referral Sources (Full List for Modal)
   const allReferralAreas = useMemo(() => {
     if (data?.detailTable && data.detailTable.length > 0) {
-      // Aggregate referCount by village
       const map = new Map();
       data.detailTable.forEach((row) => {
         if (!row.referCount) return;
@@ -369,7 +359,7 @@ const Detail = () => {
     <div className="min-h-screen bg-slate-50/50 pb-20">
       <Navigation />
 
-      {/* 1. New Action Toolbar */}
+      {/* 1. Action Toolbar */}
       <DetailActionToolbar
         currentFilters={currentFilters}
         onFilterChange={handleFilterChange}
@@ -379,10 +369,23 @@ const Detail = () => {
         availability={availability}
       />
 
-      <main className="container mx-auto px-4 space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+      <main className="container mx-auto px-4 space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700 relative">
+        {/* Loading Overlay when refetching */}
+        {detailQuery.isRefetching && (
+          <div className="absolute inset-0 bg-white/70 backdrop-blur-sm z-20 flex items-center justify-center rounded-lg">
+            <LoadingState
+              message="กำลังโหลดข้อมูล..."
+              className="bg-white/90 px-8 py-6 rounded-xl shadow-xl"
+            />
+          </div>
+        )}
+
         {isError && (
-          <div className="bg-destructive/10 border border-destructive/20 text-destructive p-4 rounded-lg text-center">
-            ไม่สามารถโหลดข้อมูลได้ กรุณาลองใหม่อีกครั้ง
+          <div className="bg-destructive/10 border border-destructive/20 text-destructive p-4 rounded-lg text-center flex flex-col items-center">
+            <span className="font-semibold">ไม่สามารถโหลดข้อมูลได้</span>
+            <span className="text-sm mt-1 opacity-80">
+              {detailQuery.error?.message || "เกิดข้อผิดพลาดในการโหลดข้อมูล"}
+            </span>
           </div>
         )}
 
@@ -390,15 +393,15 @@ const Detail = () => {
           <LoadingState message="กำลังประมวลผลข้อมูล..." />
         ) : (
           <>
-            {/* 2. Intervention Impact Stats */}
+            {/* 2. Stats */}
             <StatCards stats={detailStats} />
 
             {/* 3. Priority & Insights */}
             <InsightsGrid
-              topRiskVillages={topRiskAreas} // Passing the unified list
+              topRiskVillages={topRiskAreas}
               totalRefer={totalRefer}
               referLocationsCount={referLocationsCount}
-              referralAreas={allReferralAreas} // Pass FULL list
+              referralAreas={allReferralAreas}
               areaLevelLabel={
                 appliedFilters.subdistrict
                   ? `หมู่บ้าน (ในตำบล${appliedFilters.subdistrict})`
@@ -407,15 +410,23 @@ const Detail = () => {
                   : "อำเภอ (ภาพรวมจังหวัด)"
               }
             />
-            {/* 4. Detailed Data Table */}
+
+            {/* 4. Detailed Data Table - Using SAME data as charts! */}
             <DetailDataTable
-              data={recordsQuery.data?.records || []}
-              isLoading={recordsQuery.isFetching}
+              data={paginatedRecords}
+              isLoading={isLoading}
               page={recordsPage}
               setPage={setRecordsPage}
-              total={recordsQuery.data?.total || 0}
+              total={records.length}
               limit={recordsLimit}
             />
+
+            {/* Debug info */}
+            <div className="text-center text-[10px] text-slate-300 font-mono mt-4">
+              Debug: Year={effectiveYear} | District=
+              {appliedFilters.district || "All"} | DetailTable=
+              {data?.detailTable?.length ?? 0} | Records={records.length}
+            </div>
           </>
         )}
       </main>
