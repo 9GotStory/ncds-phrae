@@ -775,11 +775,16 @@ class GoogleSheetsApiService {
       return;
     }
 
-    if (
-      normalized.includes("unauthorized") ||
-      normalized.includes("session") ||
-      (message && message.includes("เซสชัน"))
-    ) {
+    // Only logout on explicit session expiry or invalid token
+    // NOT on generic "unauthorized" which could be a permission issue
+    const isFatalSessionError = 
+      normalized.includes("session_expired") ||
+      normalized.includes("invalid_token") ||
+      normalized.includes("missing_token") ||
+      normalized.includes("เซสชันหมดอายุ");
+
+    if (isFatalSessionError) {
+      console.warn("Session invalidated due to:", message);
       this.setAuthToken(null);
       this.clearStoredAuthArtifacts();
       this.dispatchAuthInvalidatedEvent();
