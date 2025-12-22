@@ -1065,7 +1065,7 @@ class GoogleSheetsApiService {
       success: boolean;
       data?: NcdRecordsResponse;
       message?: string;
-    }>("getNcdRecords", params, { withAuth: false, signal: options.signal });
+    }>("getNcdRecords", params, { withAuth: true, signal: options.signal });
 
     if (!result.success || !result.data) {
       this.handleAuthorizationFailure(result.message);
