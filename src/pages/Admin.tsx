@@ -703,6 +703,11 @@ const Admin = ({
   }, [showMetricsForm, editingRecord?.id]);
 
   useEffect(() => {
+    // ไม่ต้อง clamp อัตโนมัติเมื่อแก้ไขข้อมูลเดิม
+    // เพื่อรักษาค่าเดิมของโรคแต่ละชนิดไว้
+    if (editingRecord?.id) {
+      return;
+    }
     if (!showMetricsForm) {
       return;
     }
@@ -726,7 +731,7 @@ const Admin = ({
         }
       });
     });
-  }, [clampMetricValue, form, overviewTotal, showMetricsForm]);
+  }, [clampMetricValue, form, overviewTotal, showMetricsForm, editingRecord?.id]);
 
   const currentNormalDisplay = normalizeMetricValue(
     currentMetricValues?.normal
@@ -1344,8 +1349,10 @@ const Admin = ({
     if (!pendingAdjustmentValues || !editingRecord) {
       return null;
     }
+    // คำนวณ diff จาก adjustedMetrics (ค่าปัจจุบัน) ไม่ใช่ metrics (baseline ตั้งต้น)
+    const currentAdjustedMetrics = editingRecord.adjustedMetrics ?? editingRecord.metrics;
     return computeMetricsDiff(
-      editingRecord.metrics,
+      currentAdjustedMetrics,
       pendingAdjustmentValues.metrics
     );
   }, [pendingAdjustmentValues, editingRecord, computeMetricsDiff]);
@@ -1374,6 +1381,9 @@ const Admin = ({
       }>;
     }
 
+    // ใช้ adjustedMetrics เป็นค่า "ก่อนปรับ" ในการแสดงผล
+    const currentMetrics = editingRecord.adjustedMetrics ?? editingRecord.metrics;
+
     return metricStepKeys
       .map((key) => {
         const diff = pendingAdjustmentDiff[key];
@@ -1388,7 +1398,7 @@ const Admin = ({
           return null;
         }
 
-        const baselineCategory = editingRecord.metrics?.[key] ?? emptyMetrics[key];
+        const baselineCategory = currentMetrics?.[key] ?? emptyMetrics[key];
         const proposedCategory = pendingAdjustmentValues.metrics?.[key] ?? emptyMetrics[key];
 
         return {
@@ -1411,6 +1421,7 @@ const Admin = ({
     pendingAdjustmentValues,
     editingRecord,
     metricTitleMap,
+    emptyMetrics,
   ]);
 
   const formatDelta = useCallback((value: number) => {
@@ -1435,15 +1446,16 @@ const Admin = ({
       values,
       reason,
       baselineRecord,
+      diff,
     }: {
       values: NcdFormValues;
       reason?: string;
       baselineRecord: NcdRecord;
+      diff: NcdMetrics;
     }) => {
-      const diff = computeMetricsDiff(
-        baselineRecord.metrics,
-        values.metrics
-      );
+      // diff ถูกคำนวณจาก handleConfirmAdjustment แล้ว
+      // ใช้ adjustedMetrics เป็น baseline ในการคำนวณ
+
       if (isMetricsDiffEmpty(diff)) {
         throw new Error("ไม่มีการเปลี่ยนแปลงจากข้อมูลเดิม");
       }
@@ -1493,8 +1505,11 @@ const Admin = ({
       return;
     }
 
+    // คำนวณ diff จาก adjustedMetrics (ค่าปัจจุบัน) ไม่ใช่ metrics (baseline ตั้งต้น)
+    // เพราะ Form แสดงค่า adjustedMetrics ให้ User เห็น
+    const currentAdjustedMetrics = editingRecord.adjustedMetrics ?? editingRecord.metrics;
     const diff = computeMetricsDiff(
-      editingRecord.metrics,
+      currentAdjustedMetrics,
       pendingAdjustmentValues.metrics
     );
 
@@ -1507,6 +1522,7 @@ const Admin = ({
       values: pendingAdjustmentValues,
       reason: adjustmentReason,
       baselineRecord: editingRecord,
+      diff,
     });
   }, [
     pendingAdjustmentValues,

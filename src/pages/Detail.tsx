@@ -39,7 +39,7 @@ const Detail = () => {
     setRecordsPage(1);
   }, [appliedFilters]);
 
-  // 2. Main Data Query (SINGLE SOURCE OF TRUTH)
+  // 2. Dashboard Data Query (for stats, insights, availability)
   const detailQuery = useQuery({
     queryKey: [
       "detail",
@@ -75,15 +75,55 @@ const Detail = () => {
     placeholderData: (previousData) => previousData,
   });
 
-  // 3. Logic & Transforms
+  // 3. NcdRecords Query (for detailed table with disease breakdown)
+  const recordsQuery = useQuery({
+    queryKey: [
+      "ncdRecords",
+      appliedFilters.targetGroup || "all",
+      appliedFilters.district || "all",
+      appliedFilters.subdistrict || "all",
+      appliedFilters.village || "all",
+      appliedFilters.year || "all-year",
+      appliedFilters.month || "all-month",
+      appliedFilters.moo || "all-moo",
+      recordsPage,
+      recordsLimit,
+    ],
+    queryFn: ({ signal }) =>
+      googleSheetsApi.getNcdRecords(
+        {
+          targetGroup: appliedFilters.targetGroup,
+          district: appliedFilters.district || undefined,
+          subdistrict: appliedFilters.subdistrict || undefined,
+          village: appliedFilters.village || undefined,
+          moo: appliedFilters.moo || undefined,
+          year:
+            appliedFilters.year && appliedFilters.year !== "all"
+              ? Number(appliedFilters.year)
+              : undefined,
+          month:
+            appliedFilters.month && appliedFilters.month !== "all"
+              ? Number(appliedFilters.month)
+              : undefined,
+          page: recordsPage,
+          limit: recordsLimit,
+        },
+        { signal }
+      ),
+    staleTime: DETAIL_STALE_TIME,
+    gcTime: DETAIL_GC_TIME,
+    placeholderData: (previousData) => previousData,
+  });
+
+  // 4. Logic & Transforms
   const data = detailQuery.data;
   const availability = data?.availability;
-  const isError = detailQuery.isError;
+  const isError = detailQuery.isError || recordsQuery.isError;
   const summary = data?.summary;
   const adjustmentsSummary = data?.adjustments?.summary;
 
   const showInitialLoading = detailQuery.isLoading;
-  const isLoading = detailQuery.isLoading || detailQuery.isRefetching;
+  const isLoading = detailQuery.isLoading || detailQuery.isRefetching || recordsQuery.isLoading || recordsQuery.isRefetching;
 
   // Calculate effective year for display
   const effectiveYear = useMemo(() => {
@@ -96,42 +136,10 @@ const Detail = () => {
     return new Date().getFullYear() + 543;
   }, [appliedFilters.year, availability]);
 
-  // --- Synthesize NcdRecords from detailTable ---
-  // This ensures the "Detailed Records" table shows EXACTLY the same data as charts
-  const records: NcdRecord[] = useMemo(() => {
-    if (!data?.detailTable) return [];
-
-    return data.detailTable.map(
-      (row, index) =>
-        ({
-          id:
-            row.id ||
-            `row-${row.district}-${row.subdistrict}-${row.village}-${index}`,
-          targetGroup: appliedFilters.targetGroup || "general",
-          year: row.year || effectiveYear,
-          month: row.month || 0,
-          district: row.district,
-          subdistrict: row.subdistrict,
-          village: row.village,
-          moo: row.moo,
-          referCount: row.referCount,
-          // Adapt flat stats to nested metrics for DetailDataTable compatibility
-          metrics: {
-            overview: {
-              normal: row.normal || 0,
-              risk: row.risk || 0,
-              sick: row.sick || 0,
-            },
-          },
-        } as NcdRecord)
-    );
-  }, [data?.detailTable, effectiveYear, appliedFilters.targetGroup]);
-
-  // Client-side pagination
-  const paginatedRecords = useMemo(() => {
-    const startIndex = (recordsPage - 1) * recordsLimit;
-    return records.slice(startIndex, startIndex + recordsLimit);
-  }, [records, recordsPage, recordsLimit]);
+  // Use records from getNcdRecords API (has disease breakdown)
+  const records = recordsQuery.data?.records || [];
+  const recordsTotal = recordsQuery.data?.total || 0;
+  const recordsHasMore = recordsQuery.data?.hasMore || false;
 
   // --- Helper Fns ---
   const toValidNumber = (val: unknown) =>
@@ -411,14 +419,15 @@ const Detail = () => {
               }
             />
 
-            {/* 4. Detailed Data Table - Using SAME data as charts! */}
+            {/* 4. Detailed Data Table - Using getNcdRecords API with disease breakdown */}
             <DetailDataTable
-              data={paginatedRecords}
+              data={records}
               isLoading={isLoading}
               page={recordsPage}
               setPage={setRecordsPage}
-              total={records.length}
+              total={recordsTotal}
               limit={recordsLimit}
+              hasMore={recordsHasMore}
             />
 
             {/* Debug info */}

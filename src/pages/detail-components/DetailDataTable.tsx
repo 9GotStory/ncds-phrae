@@ -20,6 +20,24 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { NcdRecord } from "@/services/googleSheetsApi";
 import { cn } from "@/lib/utils";
 
+// Disease name mapping (English → Thai)
+const DISEASE_NAME_MAP: Record<string, string> = {
+  overview: "ภาพรวม",
+  Overview: "ภาพรวม",
+  Obesity: "โรคอ้วน",
+  Diabetes: "เบาหวาน",
+  Hypertension: "ความดันโลหิตสูง",
+  Mental: "สุขภาพจิต",
+  Alcohol: "การดื่มเครื่องดื่มแอลกอฮอล์",
+  Smoking: "การสูบบุหรี่",
+  CKD: "โรคไตเรื้อรัง",
+  CVD: "โรคหัวใจและหลอดเลือด",
+};
+
+const getDiseaseName = (key: string): string => {
+  return DISEASE_NAME_MAP[key] || key;
+};
+
 interface DetailDataTableProps {
   data?: NcdRecord[];
   isLoading: boolean;
@@ -27,6 +45,7 @@ interface DetailDataTableProps {
   setPage: (page: number) => void;
   total: number;
   limit: number;
+  hasMore?: boolean;
 }
 
 export function DetailDataTable({
@@ -36,6 +55,7 @@ export function DetailDataTable({
   setPage,
   total,
   limit,
+  hasMore = false,
 }: DetailDataTableProps) {
   const totalPages = Math.ceil(total / limit);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
@@ -121,10 +141,10 @@ export function DetailDataTable({
                   ) : null;
 
                   // 1. Calculate Aggregated Totals
-                  // Try to find an "Overview" or "Total" key to use as the true aggregate (unduplicated)
-                  // If not found, fall back to summing (which might be inflated if patients have multiple diseases)
-                  const metricEntries = row.metrics
-                    ? Object.entries(row.metrics)
+                  // Use adjustedMetrics (latest adjusted) if available, otherwise fallback to baseline metrics
+                  const metricsSource = row.adjustedMetrics || row.metrics;
+                  const metricEntries = metricsSource
+                    ? Object.entries(metricsSource)
                     : [];
 
                   const overviewEntry = metricEntries.find(
@@ -152,96 +172,94 @@ export function DetailDataTable({
                         { normal: 0, risk: 0, sick: 0 }
                       );
 
-                  return (
-                    <Fragment key={row.id || index}>
-                      {/* Main Row (Aggregated) */}
-                      <TableRow
-                        className={cn(
-                          "cursor-pointer hover:bg-slate-50/80 transition-colors",
-                          isExpanded && "bg-slate-50"
-                        )}
-                        onClick={() => toggleRow(row.id)}
-                      >
-                        <TableCell className="py-2 text-center">
-                          {isExpanded ? (
-                            <ChevronDown className="h-4 w-4 text-slate-400" />
-                          ) : (
-                            <ChevronRight className="h-4 w-4 text-slate-400" />
-                          )}
-                        </TableCell>
-                        <TableCell className="text-center text-slate-500 text-xs font-medium">
-                          {globalIndex}
-                        </TableCell>
-                        <TableCell className="text-sm">
-                          <span className="font-medium text-slate-700 mr-1">
-                            {row.month}
-                          </span>
-                          <span className="text-slate-400">/ {row.year}</span>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center flex-wrap gap-1">
-                            {mooBadge}
-                            <span className="font-bold text-slate-800">
-                              {row.village || row.subdistrict || row.district}
-                            </span>
-                          </div>
-                          <div className="text-[10px] text-muted-foreground mt-0.5">
-                            {row.district} {">"} {row.subdistrict}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right font-mono font-medium text-emerald-700">
-                          {metricsSum.normal.toLocaleString()}
-                        </TableCell>
-                        <TableCell className="text-right font-mono font-medium text-amber-700 bg-amber-50/30">
-                          {metricsSum.risk.toLocaleString()}
-                        </TableCell>
-                        <TableCell className="text-right font-mono font-medium text-red-700 bg-red-50/30">
-                          {metricsSum.sick.toLocaleString()}
-                        </TableCell>
-                        <TableCell className="text-right font-bold text-slate-700">
-                          {row.referCount?.toLocaleString() || "-"}
-                        </TableCell>
-                      </TableRow>
+                  const detailRows = (isExpanded &&
+                    metricEntries.length > 0 &&
+                    metricEntries
+                      .filter(
+                        ([key]) =>
+                          key.toLowerCase() !== "overview" &&
+                          key.toLowerCase() !== "total"
+                      )
+                      .map(([diseaseKey, stats]) => (
+                        <TableRow
+                          key={`${row.id}-${diseaseKey}`}
+                          className="bg-slate-50/50 hover:bg-slate-100/50 border-t-0"
+                        >
+                          <TableCell colSpan={2}></TableCell>
+                          <TableCell colSpan={2} className="py-2">
+                            <div className="flex items-center pl-4">
+                              <div className="w-2 h-2 rounded-full bg-slate-300 mr-2"></div>
+                              <span className="text-sm font-medium text-slate-600 w-32">
+                                {getDiseaseName(diseaseKey)}
+                              </span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-right font-mono text-sm text-emerald-600 py-2">
+                            {stats.normal?.toLocaleString() || 0}
+                          </TableCell>
+                          <TableCell className="text-right font-mono text-sm text-amber-600 py-2">
+                            {stats.risk?.toLocaleString() || 0}
+                          </TableCell>
+                          <TableCell className="text-right font-mono text-sm text-red-600 py-2">
+                            {stats.sick?.toLocaleString() || 0}
+                          </TableCell>
+                          <TableCell className="text-right text-xs text-muted-foreground py-2">
+                            -
+                          </TableCell>
+                        </TableRow>
+                      ))) || [];
 
-                      {/* Detail Rows (Expanded) */}
-                      {isExpanded &&
-                        metricEntries.length > 0 &&
-                        metricEntries
-                          .filter(
-                            ([key]) =>
-                              key.toLowerCase() !== "overview" &&
-                              key.toLowerCase() !== "total"
-                          )
-                          .map(([diseaseKey, stats]) => (
-                            <TableRow
-                              key={`${row.id}-${diseaseKey}`}
-                              className="bg-slate-50/50 hover:bg-slate-100/50 border-t-0"
-                            >
-                              <TableCell colSpan={2}></TableCell> {/* Indent */}
-                              <TableCell colSpan={2} className="py-2">
-                                <div className="flex items-center pl-4">
-                                  <div className="w-2 h-2 rounded-full bg-slate-300 mr-2"></div>
-                                  <span className="text-sm font-medium text-slate-600 uppercase w-20">
-                                    {diseaseKey}
-                                  </span>
-                                </div>
-                              </TableCell>
-                              <TableCell className="text-right font-mono text-sm text-emerald-600 py-2">
-                                {stats.normal?.toLocaleString() || 0}
-                              </TableCell>
-                              <TableCell className="text-right font-mono text-sm text-amber-600 py-2">
-                                {stats.risk?.toLocaleString() || 0}
-                              </TableCell>
-                              <TableCell className="text-right font-mono text-sm text-red-600 py-2">
-                                {stats.sick?.toLocaleString() || 0}
-                              </TableCell>
-                              <TableCell className="text-right text-xs text-muted-foreground py-2">
-                                -
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                    </Fragment>
-                  );
+                  return [
+                    <TableRow
+                      key={row.id || index}
+                      className={cn(
+                        "cursor-pointer hover:bg-slate-50/80 transition-colors",
+                        isExpanded && "bg-slate-50"
+                      )}
+                      onClick={() => toggleRow(row.id)}
+                    >
+                      <TableCell className="py-2 text-center">
+                        {isExpanded ? (
+                          <ChevronDown className="h-4 w-4 text-slate-400" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-slate-400" />
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center text-slate-500 text-xs font-medium">
+                        {globalIndex}
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        <span className="font-medium text-slate-700 mr-1">
+                          {row.month}
+                        </span>
+                        <span className="text-slate-400">/ {row.year}</span>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center flex-wrap gap-1">
+                          {mooBadge}
+                          <span className="font-bold text-slate-800">
+                            {row.village || row.subdistrict || row.district}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-muted-foreground mt-0.5">
+                          {row.district} {">"} {row.subdistrict}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right font-mono font-medium text-emerald-700">
+                        {metricsSum.normal.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right font-mono font-medium text-amber-700 bg-amber-50/30">
+                        {metricsSum.risk.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right font-mono font-medium text-red-700 bg-red-50/30">
+                        {metricsSum.sick.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right font-bold text-slate-700">
+                        {row.referCount?.toLocaleString() || "-"}
+                      </TableCell>
+                    </TableRow>,
+                    ...detailRows,
+                  ];
                 })
               )}
             </TableBody>
@@ -266,7 +284,7 @@ export function DetailDataTable({
             variant="outline"
             size="sm"
             onClick={() => setPage(page + 1)}
-            disabled={page >= totalPages || isLoading}
+            disabled={!hasMore || isLoading}
           >
             ถัดไป
             <ChevronRight className="h-4 w-4 ml-1" />
